@@ -7,3 +7,4 @@ site/
 .DS_Store
 reports/*.html
 reports/*_files/
+.superpowers/
