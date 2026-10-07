@@ -1,0 +1,27 @@
+Package: silcsdc
+Title: Statistical Disclosure Control on EU-SILC Public Microdata
+Version: 0.1.0
+Authors@R: person("Simone", "Mezzabotta", role = c("aut", "cre"))
+Description: Measures re-identification risk in a person-level EU-SILC file,
+    protects it with sdcMicro (global recoding, local suppression,
+    microaggregation), quantifies the information loss on official indicators,
+    and protects a magnitude table with primary and secondary cell suppression
+    using sdcTable.
+License: MIT + file LICENSE
+Encoding: UTF-8
+Depends: R (>= 4.2)
+Imports:
+    data.table,
+    digest,
+    ggplot2,
+    jsonlite,
+    pkgload,
+    sdcHierarchies,
+    sdcMicro,
+    sdcTable
+Suggests:
+    knitr,
+    rmarkdown,
+    testthat (>= 3.0.0),
+    withr
+Config/testthat/edition: 3

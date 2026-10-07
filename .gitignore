@@ -1,0 +1,9 @@
+data/raw/
+output/
+site/
+.Rhistory
+.RData
+.Rproj.user/
+.DS_Store
+reports/*.html
+reports/*_files/

@@ -1,0 +1,374 @@
+---
+title: "Statistical disclosure control on EU-SILC microdata"
+subtitle: "Risk, protection and information loss for a person-level file and a magnitude table"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    self_contained: true
+params:
+  output_dir: "../output"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE,
+                      fig.width = 8, fig.height = 4.2, dpi = 144)
+library(data.table)
+library(ggplot2)
+out <- function(f) fread(file.path(params$output_dir, f))
+info <- jsonlite::read_json(file.path(params$output_dir, "run_info.json"))
+risk <- out("risk.csv")
+supp <- out("suppressions.csv")
+ind <- out("indicators.csv")
+ovl <- out("ci_overlap.csv")
+tab <- out("table_protected.csv")
+tab_sum <- out("table_summary.csv")
+audit <- out("table_audit.csv")
+audit0 <- out("table_audit_without_secondary.csv")
+
+fmt <- function(x, d = 0) formatC(x, format = "f", digits = d, big.mark = ",")
+pct <- function(x, d = 1) paste0(formatC(x, format = "f", digits = d), "%")
+
+# Reference palette (validated categorical slots 1-3, neutral gray).
+pal <- c(blue = "#2a78d6", orange = "#eb6834", aqua = "#1baf7a", gray = "#d9d8d4")
+theme_report <- theme_minimal(base_size = 11) +
+  theme(panel.grid.minor = element_blank(),
+        panel.grid.major = element_line(colour = "#ecebe8", linewidth = 0.3),
+        axis.title = element_text(colour = "#52514e"),
+        axis.text = element_text(colour = "#52514e"),
+        plot.title.position = "plot",
+        legend.position = "top", legend.justification = "left")
+
+orig <- risk[step == "no protection"]
+final <- risk[step == "after local suppression"]
+n_keys <- 8
+scen_short <- function(x) sub(":.*", "", x)
+```
+
+<div class="alert alert-warning" role="note">
+<strong>The data are synthetic.</strong> The EU-SILC public microdata are
+simulated by Eurostat from models of the real survey: they contain no real
+person, and Eurostat states that they cannot be used to draw conclusions about
+the population. This project treats the file <em>as if</em> it were
+confidential, to show the full disclosure-control workflow. All risk figures
+and indicator values below illustrate the method; they say nothing about real
+people or regions.
+</div>
+
+## Summary
+
+This project plays the role of a statistical office that must release a
+**public-use microdata file** and a **published table** from a household
+survey without disclosing information about any respondent. It uses the
+Italian file of the EU-SILC public microdata (`r info$year`,
+`r fmt(info$persons)` persons aged 16 and over in `r fmt(info$households)`
+households) as if it were the confidential source.
+
+- In the original file, `r fmt(orig$sample_uniques)` records
+  (`r pct(100 * orig$sample_uniques / orig$records)`) have a combination of
+  eight publicly knowable characteristics that nobody else in the sample shares.
+  The model-based estimate is `r fmt(orig$expected_reidentifications, 1)`
+  expected re-identifications.
+- Three protection scenarios were compared. All of them remove every sample
+  unique. They differ in how much detail they sacrifice to get there.
+- The recommended scenario, **`r final[scenario %like% "^S3", scenario]`**,
+  leaves no combination shared by fewer than 5 records, reduces expected
+  re-identifications to `r fmt(final[scenario %like% "^S3", expected_reidentifications], 2)`,
+  and changes the headline income and poverty indicators by less than
+  `r pct(ind[scenario %like% "^S3", max(abs(rel_diff_pct))], 2)`.
+- In the table of employee income by region, occupation and sex,
+  `r tab_sum$primary` cells are sensitive and `r tab_sum$secondary` more
+  are hidden to stop them from being recomputed from the margins. Without
+  the secondary suppressions, `r sum(!audit0$protected)` of the
+  `r nrow(audit0)` sensitive cells could be recomputed exactly; with them, none can.
+
+## Why disclosure control
+
+European statistics are produced under a legal duty of statistical
+confidentiality (Regulation (EC) No 223/2009, Article 20, and Principle 5 of
+the European Statistics Code of Practice). Removing names and identifiers is
+not enough: a person can be recognised from a combination of ordinary
+characteristics, such as region, age, household size and occupation.
+Statistical disclosure control (SDC) measures that risk and reduces it while
+keeping the data useful.
+
+## Data and scenario
+
+**Source.** Eurostat, EU-SILC public microdata for Italy, file
+`IT_PUF_EUSILC.zip`, SHA-256 `r substr(info$sha256, 1, 16)`…, downloaded from
+the Eurostat website. The public microdata are **fully synthetic**: they are
+simulated from models of the real survey and contain no real respondent.
+Eurostat states that they cannot be used for inference about the population.
+Here they are used for what they are meant for: training and method
+development. The risk figures below describe this synthetic file, not real
+people.
+
+**Intruder scenario.** An intruder knows some facts about a person and looks
+for records that match them. The facts considered are the *key variables*
+(quasi-identifiers):
+
+| Key variable | EU-SILC variable | Detail in the source |
+|---|---|---|
+| Region | DB040 | NUTS 2 (21 regions) |
+| Sex | PB150 | 2 categories |
+| Age | PX020 | single years, 16 to 80+ |
+| Marital status | PB190 | 5 categories |
+| Citizenship | PB220A | Italy / other EU / non-EU |
+| Education | PE040 | ISCED 1997, 7 levels |
+| Occupation | PL051 | ISCO-08 major group, 9 groups |
+| Household size | HX040 | 1 to 10 |
+
+Survey identifiers (PB030, PX030) are direct identifiers and are replaced by
+random numbers. Employee income (PY010G) and household disposable income
+(HY020) are confidential numerical variables. Weights (PB040) are kept.
+
+## Risk in the original file
+
+Two families of measures are used.
+
+- **k-anonymity** counts records whose combination of keys appears fewer than
+  *k* times in the sample. It needs no model and is easy to explain.
+- **Individual risk** (Benedetti and Franconi, the method used by Istat and
+  implemented in sdcMicro) estimates the probability that a match is correct,
+  using the sampling weights to estimate how many people in the population
+  share the same combination. The sum over records is the expected number of
+  re-identifications. *Household risk* is the probability that at least one
+  member of a household is re-identified, since identifying one member
+  exposes the others.
+
+```{r risk-original}
+knitr::kable(
+  data.table(
+    Measure = c("Records", "Sample uniques", "Records violating 3-anonymity",
+                "Records violating 5-anonymity", "Expected re-identifications",
+                "Global risk", "Household risk"),
+    Value = c(fmt(orig$records), fmt(orig$sample_uniques), fmt(orig$violating_3_anonymity),
+              fmt(orig$violating_5_anonymity), fmt(orig$expected_reidentifications, 1),
+              pct(orig$global_risk_pct, 2), pct(orig$household_risk_pct, 2))
+  ), align = "lr")
+```
+
+The two families disagree, and the reason matters. About two thirds of the
+records are unique in the sample, but each sampled person represents about 1,400
+people (the mean weight), so the model expects few of those sample uniques to be
+unique in the population as well. Agencies usually require both: a k-anonymity
+threshold for the release file, and a check that the model-based risk is low.
+
+## Protection methods
+
+Each scenario applies three standard methods in this order (Hundepool et al.,
+*Handbook on Statistical Disclosure Control*, 2012):
+
+1. **Global recoding** of the key variables into broader categories.
+2. **Local suppression**: individual key values are blanked, choosing the
+   values that break the most risky combinations, until every combination is
+   shared by at least *k* records. Region, sex and age are suppressed last
+   because they matter most to users.
+3. **Microaggregation** (MDAV, groups of 3) of the two income variables: each
+   value is replaced by the mean of a group of three similar values, so no
+   exact income is released. Household income is treated once per household,
+   so all members of a household keep the same value.
+
+```{r scenarios}
+knitr::kable(data.table(
+  Scenario = c("S1", "S2", "S3"),
+  Region = c("NUTS 2", "NUTS 1", "NUTS 1"),
+  Age = c("5-year bands", "10-year bands", "10-year bands"),
+  `Other keys` = c("source detail", "grouped", "grouped"),
+  k = c(3, 3, 5)
+), align = "lllll")
+```
+
+"Grouped" means: occupation in four skill groups, education as low / medium /
+high, marital status as never married / married / previously married,
+household size top-coded at 5 or more.
+
+## Risk after protection
+
+```{r risk-steps}
+r <- risk[step != "no protection",
+          .(Scenario = scen_short(scenario), Step = step,
+            `Sample uniques` = fmt(sample_uniques),
+            `< 3-anonymity` = fmt(violating_3_anonymity),
+            `< 5-anonymity` = fmt(violating_5_anonymity),
+            `Expected re-identifications` = fmt(expected_reidentifications, 2),
+            `Household risk` = pct(household_risk_pct, 3))]
+knitr::kable(r, align = "llrrrrr")
+```
+
+Recoding alone does most of the work for S2 and S3. In S1, which keeps
+detailed codes, recoding leaves many combinations rare, so local suppression
+has to blank many more values to reach the same guarantee.
+
+## Information loss
+
+### Suppressed values
+
+```{r supp-chart, fig.height = 3.8}
+s <- copy(supp)[, scenario := scen_short(scenario)]
+labels <- c(region = "Region", sex = "Sex", age = "Age", marital = "Marital status",
+            citizenship = "Citizenship", isced = "Education", isco1 = "Occupation",
+            hh_size = "Household size")
+s[, variable := factor(labels[variable], levels = rev(labels))]
+ggplot(s, aes(x = suppressed, y = variable, fill = scenario)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.72) +
+  scale_fill_manual(values = unname(pal[c("blue", "orange", "aqua")]), name = NULL) +
+  scale_x_continuous(labels = scales::comma, expand = expansion(mult = c(0, 0.05))) +
+  labs(x = "Values blanked by local suppression", y = NULL) +
+  theme_report
+```
+
+```{r supp-table}
+st <- supp[, .(`Values suppressed` = fmt(sum(suppressed)),
+               `Share of key values` = pct(100 * sum(suppressed) / (orig$records * n_keys), 2)),
+           by = .(Scenario = scen_short(scenario))]
+knitr::kable(st, align = "lrr")
+```
+
+### Indicators
+
+Each indicator is computed on the original and on the protected file with
+the same code. The poverty threshold is 60% of the national median
+equivalised disposable income, as in the Eurostat indicator `ilc_li02`.
+Because the file is synthetic, the levels are not real Italian statistics;
+only the differences matter. The differences come almost entirely from the
+microaggregation of incomes, which is the same in all scenarios: suppressing
+key values hardly moves these indicators. The scenarios differ instead in
+the detail they publish and in the number of blanked values.
+
+```{r indicators}
+iw <- dcast(ind[, .(indicator, domain, scenario = scen_short(scenario), rel_diff_pct)],
+            indicator + domain ~ scenario, value.var = "rel_diff_pct")
+base <- unique(ind[, .(indicator, domain, value_original)])
+iw <- merge(base, iw, by = c("indicator", "domain"))
+iw[, value_original := ifelse(indicator %like% "AROP|Gini", fmt(value_original, 3), fmt(value_original))]
+for (s in intersect(c("S1", "S2", "S3"), names(iw))) set(iw, j = s, value = pct(iw[[s]], 2))
+setnames(iw, c("indicator", "domain", "value_original"), c("Indicator", "Domain", "Original value"))
+knitr::kable(iw, align = "llrrrr",
+             caption = "Relative difference, protected vs original")
+```
+
+### Regression
+
+A user fitting a wage equation (log employee income on sex, age band and
+NUTS 1 area, weighted) should reach the same conclusions on the protected
+file. The confidence-interval overlap (Karr et al., 2006) is 1 when the 95%
+intervals coincide and 0 when they do not overlap at all.
+
+```{r overlap}
+ov <- ovl[term != "(Intercept)", .(`Mean overlap` = round(mean(overlap), 2),
+                                   `Lowest overlap` = round(min(overlap), 2),
+                                   `Coefficients` = .N),
+          by = .(Scenario = scen_short(scenario))]
+knitr::kable(ov, align = "lrrr")
+```
+
+## Risk-utility trade-off
+
+```{r ru-map, fig.height = 4}
+ru <- rbind(
+  data.table(label = "Original", loss = 0, er = orig$expected_reidentifications),
+  merge(final[, .(scenario, er = expected_reidentifications)],
+        supp[, .(loss = 100 * sum(suppressed) / (orig$records * n_keys)), by = scenario],
+        by = "scenario")[, .(label = scen_short(scenario), loss, er)]
+)
+ggplot(ru, aes(x = loss, y = er)) +
+  geom_point(size = 3.2, colour = pal[["blue"]]) +
+  geom_text(aes(label = label), nudge_x = 0.25, hjust = 0, size = 3.6, colour = "#0b0b0b") +
+  scale_y_log10() +
+  scale_x_continuous(expand = expansion(mult = c(0.05, 0.25))) +
+  labs(x = "Key values suppressed (% of all key values)",
+       y = "Expected re-identifications (log scale)") +
+  theme_report
+```
+
+Points lower down are safer; points further left lose less detail. Global
+recoding is not captured on the horizontal axis: S2 and S3 publish coarser
+categories than S1 for every record.
+
+**Recommendation.** S3 is the release candidate. It reaches 5-anonymity with
+far fewer suppressions than S1 because recoding removed the rare categories
+first, and its indicators are practically unchanged. Moving from S2 to S3
+(k = 3 to k = 5) roughly doubles the suppressions but removes the remaining
+records that share their combination with only 3 or 4 others. S1 keeps regional
+detail but must blank many more values, mostly occupation, and offers only
+3-anonymity. Users who need NUTS 2 detail should use the scientific-use file
+under a research contract rather than a more detailed public file.
+
+## Table protection
+
+Published tables leak information too. The table is the estimated total
+employee income by region (Italy, NUTS 1, NUTS 2), occupation (ISCO major
+group) and sex: `r fmt(tab_sum$cells)` cells including all margins.
+
+- **Primary suppression.** A cell is sensitive if it has fewer than 3
+  contributors (threshold rule) or if the second-largest contributor could
+  estimate the largest within 10% by subtracting its own value from the total
+  (p% rule, p = 10).
+- **Secondary suppression.** A suppressed cell could be recomputed from
+  its row or column totals, so additional cells are hidden. sdcTable's
+  `SIMPLEHEURISTIC` chooses them across the region hierarchy.
+- **Audit.** For every sensitive cell, a linear program computes the tightest
+  interval an intruder can derive from the published cells. The cell is
+  protected only if that interval is not a single value.
+
+```{r table-summary}
+knitr::kable(data.table(
+  Item = c("Cells", "Published", "Primary suppressions", "Secondary suppressions",
+           "Income in suppressed detailed cells",
+           "Sensitive cells recomputable without secondary suppression",
+           "Sensitive cells recomputable with secondary suppression"),
+  Value = c(fmt(tab_sum$cells), fmt(tab_sum$published), fmt(tab_sum$primary),
+            fmt(tab_sum$secondary), pct(tab_sum$income_hidden_pct, 1),
+            paste(sum(!audit0$protected), "of", nrow(audit0)),
+            paste(sum(!audit$protected), "of", nrow(audit)))
+), align = "lr")
+```
+
+```{r table-pattern, fig.height = 6.2}
+p <- tab[nchar(region) == 4 & occupation != "Total" & sex != "Total"]
+p[, status := fcase(sdcStatus == "u", "Primary suppression",
+                    sdcStatus == "x", "Secondary suppression",
+                    default = "Published")]
+p[, status := factor(status, levels = c("Published", "Primary suppression", "Secondary suppression"))]
+p[, sex := fifelse(sex == "F", "Women", "Men")]
+p[, occupation := sub("^OC0", "", occupation)]
+p[occupation == "1", occupation := "0-1"]
+p[, region := factor(region, levels = rev(sort(unique(region))))]
+ggplot(p, aes(x = occupation, y = region, fill = status)) +
+  geom_tile(colour = "white", linewidth = 1) +
+  facet_wrap(~sex) +
+  scale_fill_manual(values = c(`Published` = pal[["gray"]],
+                               `Primary suppression` = pal[["orange"]],
+                               `Secondary suppression` = pal[["blue"]]),
+                    name = NULL, drop = FALSE) +
+  labs(x = "Occupation (ISCO-08 major group)", y = "NUTS 2 region") +
+  theme_report + theme(panel.grid.major = element_blank())
+```
+
+`r sum(p$status == "Primary suppression" & p$sex == "Women")` of the
+`r sum(p$status == "Primary suppression")` sensitive detailed cells are for
+women: occupations with few female employees (skilled agricultural workers,
+group 6; plant and machine operators, group 8; managers, groups 0-1) in small
+or southern regions. Secondary suppressions fall on the matching cells for
+men and on neighbouring regions, so that no row or column total can be used
+to recover them.
+
+## Limitations
+
+- The source is synthetic, so the risk levels are illustrative. On a real
+  confidential file the same code would give different numbers.
+- The intruder scenario fixes eight key variables. A different scenario (for
+  example an intruder who knows income) needs its own key variables.
+- Microaggregation by itself does not guarantee that a very high income
+  cannot be linked to an outlier; a production release would add top-coding
+  of income checked against the actual distribution.
+- `SIMPLEHEURISTIC` does not minimise the information hidden. An
+  optimisation method (`OPT`, or τ-ARGUS) would usually hide less.
+
+## Reproducibility
+
+Source file pinned by SHA-256 in `data/manifest.json`; sdcMicro
+`r info$sdcMicro`, sdcTable `r info$sdcTable`; run at `r info$run_at`.
+Code: <https://github.com/simones99/eu-silc-sdc>.

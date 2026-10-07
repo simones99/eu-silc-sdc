@@ -1,0 +1,8 @@
+^LICENSE\.md$
+^data$
+^docs$
+^reports$
+^scripts$
+^output$
+^site$
+^\.github$

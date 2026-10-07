@@ -1,0 +1,10 @@
+{
+  "source": "Eurostat, EU-SILC public microdata (public use files), Italy",
+  "landing_page": "https://ec.europa.eu/eurostat/web/microdata/public-microdata/statistics-on-income-and-living-conditions",
+  "url": "https://ec.europa.eu/eurostat/documents/203647/16979414/IT_PUF_EUSILC.zip/85859e71-fa25-e316-9e37-ad72e8020d4a",
+  "file": "IT_PUF_EUSILC.zip",
+  "bytes": 44887809,
+  "sha256": "97135d88df36ebd10d0c2a87b2eeecf87d26f9cfacf904d610768e038d5fda0e",
+  "retrieved": "2026-10-07",
+  "year_used": 2013
+}
