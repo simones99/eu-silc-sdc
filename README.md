@@ -47,14 +47,14 @@ size, occupation...). The project:
 | Region / age detail | NUTS 2 / 1 year | NUTS 2 / 5 years | NUTS 1 / 10 years | NUTS 1 / 10 years |
 | Anonymity target | none | k = 3 | k = 3 | k = 5 |
 | Sample uniques | 24,337 | 0 | 0 | 0 |
-| Records shared by fewer than 5 | 34,387 | 4,083 | 2,483 | **0** |
+| Records shared by fewer than 5 | 34,387 | 7,217 | 2,592 | **0** |
 | Smallest group, weight added to the keys | – | 3 | 3 | **5** |
-| Expected re-identifications | 178.0 | 5.8 | 2.9 | **1.8** |
-| Key values blanked | – | 27,883 | 5,223 | 9,634 |
-| Largest change in an indicator: weight only | – | 0.18% | 2.98% | 2.98% |
+| Expected re-identifications | 178.0 | 7.5 | 2.9 | **1.8** |
+| Key values blanked | – | 26,885 | 5,163 | 9,588 |
+| Largest change in an indicator: weight only | – | 0.46% | 2.98% | 2.98% |
 | Largest change in an indicator: incomes only | – | 0.27% | 0.27% | 0.27% |
-| Largest change in an indicator: released file | – | 0.46% | 2.98% | 2.98% |
-| Mean CI overlap, wage regression | – | 0.98 | 0.79 | 0.79 |
+| Largest change in an indicator: released file | – | 0.52% | 2.98% | 2.98% |
+| Mean CI overlap, wage regression | – | 0.94 | 0.79 | 0.79 |
 
 **S3 is the release candidate.** Recoding first removes most rare
 combinations, so reaching 5-anonymity costs far fewer blanked values than
@@ -84,7 +84,7 @@ macOS, sdcTable needs GLPK (`brew install glpk`) when built from source.
 
 ```sh
 Rscript -e 'renv::restore()'            # installs the pinned packages
-Rscript scripts/run_pipeline.R          # about 15 minutes; S1 takes most of it
+Rscript scripts/run_pipeline.R          # about 20 minutes; S1 takes most of it
 Rscript scripts/render_report.R         # writes site/index.html
 Rscript -e 'testthat::test_local()'     # unit tests on small synthetic data
 ```

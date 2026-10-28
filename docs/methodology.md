@@ -153,22 +153,31 @@ region (NUTS 2 in S1, NUTS 1 in S2 and S3). Let `T_r` be the sum of original
 weights of the records whose region at the released level is `r`, `n_r` their
 number, `T` and `n` the national totals, and `s_r` the number of records of
 `r` whose region is blanked in the release. Records with a blanked region all
-get the national weight `w_s = T / n`; the other records of `r` get
+get one common weight `w_s`; the other records of `r` get
 `w_r = (T_r − s_r · w_s) / (n_r − s_r)`. Regional and national totals of the
-weights are preserved exactly; the weight is constant within the released
-region, so it carries no information below it, and the weight of a record
-with a blanked region does not depend on its region. If a region has every
-record blanked, or so many that `w_r` would be zero or negative (`s_r · w_s ≥
-T_r`, possible in a small region), the run stops with an error naming the
+weights are preserved exactly for any `w_s`; the weight is constant within
+the released region, so it carries no information below it, and the weight
+of a record with a blanked region does not depend on its region. The common
+weight is the national mean `T / n`, lowered to the mean `T_r / n_r` of any
+region with blanked records whose mean is lower:
+`w_s = min(T / n, min over r with s_r > 0 of T_r / n_r)`. Then
+`w_r − T_r / n_r = s_r · (T_r / n_r − w_s) / (n_r − s_r) ≥ 0`, so the other
+records of every region get at least their region's mean weight, and a
+low-weight region with many blanked records keeps a positive weight. If a
+region has every record blanked, the run stops with an error naming the
 region rather than release such a weight.
 
 The rule has a cost. In S1, where the weight is already constant within each
 NUTS 2 region, it changes the weights only through the records with a
-blanked region: they get the national weight and the other records of their
-region absorb the difference. In a small region the difference can be
-large: in Valle d'Aosta (ITC2), with 49 of 643 records blanked, the weight of
-the other records falls from 166 to 65 (the run would stop at 77 blanked
-records). In S2 and S3 the rule removes the correction for the different
+blanked region: they get the common weight and the other records of their
+region absorb the difference. On the 2013 file 458 records have their region
+blanked in S1, 51 of them among the 643 records of Valle d'Aosta (ITC2),
+the region with the lowest mean weight (166). The common weight is therefore
+166 rather than the national mean of 1,388, and the other records of ITC2
+keep their weight of 166; with the national mean they would fall to 61. The
+regions with heavier weights absorb the difference: the largest increase is
+in Bolzano (ITH1), where 39 of 347 records are blanked and the weight of the
+others rises from 1,224 to 1,357 (+10.9%). In S2 and S3 the rule removes the correction for the different
 sampling rates of the NUTS 2 regions inside each NUTS 1 area: Umbria, with about 490 persons per record,
 and Lazio, with about 1,800, get the same weight. This cannot be avoided by
 another choice of weight: a weight that corrects the NUTS 2 composition must
@@ -201,7 +210,7 @@ and in the report.
   age appear in the release. It must be 0.
 
 Records with a blanked region need a rule in the first two checks. They all
-share the national weight `w_s`, and that value says only that the region is
+share the common weight `w_s`, and that value says only that the region is
 blank, which the blank itself already says. In `min_fk_with_weight` their
 weight is therefore treated as blank too, matching any value like their
 region, and in `weights_spanning_one_nuts2` that value is not counted. If
@@ -250,13 +259,14 @@ original and on the protected file.
   as a device for comparing the two files, not as valid inference.
 
 Finding: microaggregation moves no indicator by more than 0.27%, in any
-scenario. In S1 the weight effect is at most 0.18%; the largest total change,
-0.46% on the AROP rate of Nord-Est, comes from the records with a blanked
-region, which drop out of the regional figures. In S2 and S3 the weight is
+scenario. In S1 the weight effect is at most 0.46%; the largest total change,
+0.52% on the AROP rate of Nord-Ovest, comes from the records with a blanked
+region, which drop out of the regional figures and carry the low common
+weight. In S2 and S3 the weight is
 the dominant source: it moves the AROP rate of Centro by −2.98%, the national
 AROP rate by −0.97% and mean employee income by −2.42%, and the total changes
 are about the same. The confidence-interval overlap of the wage regression
-falls from 0.98 in S1 to 0.79 in S2 and S3 for the same reason. Moving from
+falls from 0.94 in S1 to 0.79 in S2 and S3 for the same reason. Moving from
 k = 3 to k = 5 leaves the indicators unchanged; the scenarios differ there in
 the number of blanked values, which is what the risk-utility map plots.
 
@@ -348,7 +358,7 @@ they would let an intruder narrow down the suppressed values.
   same release checks. In S2 and S3 no released weight can restore the
   NUTS 2 composition without revealing NUTS 2 (section 4).
 - **Blanked regions and regional totals.** The released weights keep each
-  region's total, and records with a blanked region carry the national
+  region's total, and records with a blanked region share one common
   weight. Anyone who knows the official NUTS 1 population totals can
   therefore work out how many records with a blanked region belong to each
   NUTS 1 area, though not which ones. On the 2013 file 7 records in S3 have
