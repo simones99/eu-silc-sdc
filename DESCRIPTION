@@ -1,6 +1,6 @@
 Package: silcsdc
 Title: Statistical Disclosure Control on EU-SILC Public Microdata
-Version: 0.2.0
+Version: 0.2.1
 Authors@R: person("Simone", "Mezzabotta", role = c("aut", "cre"))
 Description: Measures re-identification risk in a person-level EU-SILC file,
     protects it with sdcMicro (global recoding, local suppression,
