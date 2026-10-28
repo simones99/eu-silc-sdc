@@ -204,8 +204,10 @@ Each scenario applies three standard methods in this order (Hundepool et al.,
 
 The released weight is the original weight post-stratified to the released
 region: one value per released region (NUTS 2 in S1, NUTS 1 in S2 and S3)
-and one national value for records whose region is blanked, so that regional
-and national totals are unchanged. It carries no information below the
+and one common value for records whose region is blanked, so that regional
+and national totals are unchanged. The common value is the national mean
+weight, or the mean of a region with blanked records if that is lower, so
+that no region is left with a weight below its mean. It carries no information below the
 released region. The price is that, in S2 and S3, it no longer corrects for
 the different sampling rates of the NUTS 2 regions inside a NUTS 1 area: any
 weight that does so must differ between NUTS 2 regions, and so reveals them.
@@ -277,11 +279,11 @@ fk_w <- checks[check == "min_fk_with_weight", setNames(value, scen_short(scenari
 With the released weight added to the keys, the smallest group has
 `r for_sc(fk_w, "S1")` records in S1, `r for_sc(fk_w, "S2")` in S2 and
 `r for_sc(fk_w, "S3")` in S3. Because the released weight is one value per
-released region plus one national value for blanked regions, this check
+released region plus one common value for blanked regions, this check
 gives the same result as k-anonymity on the eight keys alone: it shows that
 the weight adds no detail to the keys, not a second, independent guarantee.
 Records with a blanked
-region all share one national weight, which says only what the blank already
+region all share one weight, which says only what the blank already
 says, so in the group check their weight matches any value, like their
 region, and in the NUTS 2 check that value is not counted (were their
 weights different, they would be checked as they are).
@@ -340,7 +342,7 @@ top_text <- if (nrow(top) == 0) "n/a" else {
 
 Microaggregation is the same in every scenario and moves no indicator by
 more than `r for_sc(mx_i, "S3", pct, 2)`. In S1 the weight changes only through the
-records with a blanked region, which get the national weight while the rest
+records with a blanked region, which share one common weight while the rest
 of their region absorbs the difference; its effect is at most
 `r for_sc(mx_w, "S1", pct, 2)`. In S2
 and S3 the weight is the larger source: it is constant within each NUTS 1
@@ -525,7 +527,7 @@ sensitive cell at least as wide as its p% protection level on both sides.
   calibrate the weights to several published margins (for example sex and
   age band within NUTS 1) and run the same release checks on the result.
 - The released weights keep each region's total, and records with a blanked
-  region carry the national weight. Anyone who knows the official NUTS 1
+  region share one common weight. Anyone who knows the official NUTS 1
   population totals can therefore work out how many records with a blanked
   region belong to each NUTS 1 area, though not which ones.
 - The cells added after the audit are chosen one failing cell at a time; the
