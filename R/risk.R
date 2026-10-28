@@ -48,13 +48,10 @@ risk_summary <- function(obj, label) {
   )
 }
 
-# Values suppressed (set to NA) by local suppression, per key variable.
-suppression_summary <- function(obj, label) {
-  ls <- obj@localSuppression
-  if (is.null(ls)) {
-    counts <- setNames(rep(0L, length(KEY_VARS)), KEY_VARS)
-  } else {
-    counts <- unlist(ls$supps)
-  }
-  data.table(scenario = label, variable = names(counts), suppressed = as.integer(counts))
+# Values suppressed by protection, per key variable: NA in the final keys and
+# not NA in the keys right after recoding (values missing in the source are
+# not counted).
+suppression_summary <- function(recoded, final, label) {
+  counts <- vapply(KEY_VARS, function(v) sum(is.na(final[[v]]) & !is.na(recoded[[v]])), integer(1))
+  data.table(scenario = label, variable = KEY_VARS, suppressed = unname(counts))
 }

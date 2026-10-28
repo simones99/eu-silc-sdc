@@ -40,3 +40,28 @@ test_that("employee income is microaggregated, not released exactly", {
   expect_equal(sum(rel$emp_income * rel$weight), sum(persons$emp_income * persons$weight),
                tolerance = 0.02)
 })
+
+test_that("a household key suppressed for one member is suppressed for all", {
+  small <- persons[hh_id %in% persons[, .N, by = hh_id][N >= 2, hh_id][1:3]]
+  obj <- new_sdc(as_sdc_input(small, "nuts2"))
+  keys <- sdcMicro::get.sdcMicroObj(obj, "manipKeyVars")
+  keys$region[1] <- NA
+  obj <- sdcMicro::set.sdcMicroObj(obj, "manipKeyVars", list(keys))
+  out <- sdcMicro::get.sdcMicroObj(harmonise_household_keys(obj), "manipKeyVars")
+  hh <- small$hh_id
+  expect_true(all(is.na(out$region[hh == hh[1]])))
+  expect_false(any(is.na(out$region[hh != hh[1]])))
+})
+
+test_that("suppression_summary counts only values blanked by protection", {
+  recoded <- as.data.frame(setNames(rep(list(c("a", "b", "c")), length(KEY_VARS)), KEY_VARS))
+  recoded$isco1[1] <- NA                       # missing in the source
+  final <- recoded
+  final$region[2] <- NA
+  final$hh_size[3] <- NA
+  s <- suppression_summary(recoded, final, "S")
+  expect_equal(s[variable == "region", suppressed], 1L)
+  expect_equal(s[variable == "hh_size", suppressed], 1L)
+  expect_equal(s[variable == "isco1", suppressed], 0L)
+  expect_equal(sum(s$suppressed), 2L)
+})

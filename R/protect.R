@@ -75,6 +75,20 @@ protect_household_income <- function(households, aggr = 3) {
   data.table(hh_id = hh$hh_id, eq_income = m$mx$eq_income)
 }
 
+# Household keys are released with a household id, so a value suppressed for
+# one member must be suppressed for all members. sdcMicro treats NA as matching
+# any value, so the extra NAs cannot lower k-anonymity.
+harmonise_household_keys <- function(obj, vars = c("region", "hh_size")) {
+  keys <- sdcMicro::get.sdcMicroObj(obj, "manipKeyVars")
+  hh <- sdcMicro::get.sdcMicroObj(obj, "origData")$hh_id
+  for (v in vars) {
+    any_na <- ave(is.na(keys[[v]]), hh, FUN = any)
+    keys[[v]][any_na] <- NA
+  }
+  obj <- sdcMicro::set.sdcMicroObj(obj, "manipKeyVars", list(keys))
+  sdcMicro::calcRisks(obj)
+}
+
 # Run one scenario. Returns the risk after each step, the final sdcMicro
 # object and the release file.
 run_scenario <- function(persons, scenario, hh_income_protected, seed = 2026) {
@@ -82,11 +96,15 @@ run_scenario <- function(persons, scenario, hh_income_protected, seed = 2026) {
   obj <- new_sdc(df, num_vars = "emp_income", seed = seed)
   obj <- recode_keys(obj, scenario)
   after_recoding <- risk_summary(obj, scenario$label)[, step := "after global recoding"]
+  recoded_keys <- sdcMicro::get.sdcMicroObj(obj, "manipKeyVars")
   obj <- sdcMicro::localSuppression(obj, k = scenario$k,
                                     importance = unname(SUPPRESSION_IMPORTANCE[KEY_VARS]))
+  obj <- harmonise_household_keys(obj)
   obj <- sdcMicro::microaggregation(obj, variables = "emp_income", aggr = 3, method = "mdav")
   final <- risk_summary(obj, scenario$label)[, step := "after local suppression"]
-  list(risk = rbind(after_recoding, final), obj = obj,
+  suppressions <- suppression_summary(recoded_keys, sdcMicro::get.sdcMicroObj(obj, "manipKeyVars"),
+                                      scenario$label)
+  list(risk = rbind(after_recoding, final), obj = obj, suppressions = suppressions,
        release = build_release(obj, hh_income_protected, seed))
 }
 
