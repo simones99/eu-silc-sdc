@@ -46,9 +46,14 @@ knows, for a target person, facts that are usually easy to find out:
 |---|---|
 | Direct identifiers (removed) | PB030 person ID, PX030 household ID |
 | Key variables (quasi-identifiers) | region (DB040), sex (PB150), age (PX020), marital status (PB190), citizenship (PB220A), education (PE040), occupation (PL051), household size (HX040) |
-| Confidential numerical variables | employee cash income (PY010G), household disposable income (HY020) |
-| Weight | personal cross-sectional weight (PB040) |
+| Confidential numerical variables | employee cash income (PY010G), equivalised disposable income (HY020 / HX050) |
+| Weight | personal cross-sectional weight (PB040), replaced by a released weight (section 4) |
 | Household structure | household ID, used for household risk |
+
+Household disposable income (HY020) and the equivalised household size
+(HX050) are not released. The equivalised size maps one to one to household
+size, also inside the top-coded "5+" class, and the ratio of the two incomes
+gives it back; either would undo the recoding of household size.
 
 Self-defined economic status (PL031) is released but not treated as a key:
 it changes often and is less likely to be known to an intruder. A different
@@ -95,12 +100,25 @@ Each scenario applies, in this order:
    key values, choosing those that break the most unsafe combinations, until
    the file is k-anonymous. The importance vector makes region and sex the
    last candidates, then age and household size; occupation goes first.
-3. **Microaggregation** (`microaggregation`, MDAV, groups of 3). Each income
+3. **Household-consistent suppression.** Region and household size are
+   household characteristics, and the release keeps a household identifier,
+   so a value blanked for one member could be read from another member of
+   the same household. After local suppression, if either key is blank for
+   any member, it is blanked for every member, and the risk is recomputed
+   (`calcRisks`). A blank matches any value, so the extra blanks can only
+   enlarge groups and k-anonymity is preserved. The suppression counts
+   compare the final keys with the recoded keys, so they include these extra
+   blanks and exclude values that are missing in the source (occupation for
+   people without a job, unknown citizenship).
+4. **Microaggregation** (`microaggregation`, MDAV, groups of 3). Each income
    is replaced by the mean of a group of at least three similar incomes.
-   Employee income is treated at person level. Household income is treated
-   once per household on a separate household file and merged back, so all
-   members of a household keep the same value.
-4. **Identifiers.** Person and household identifiers are replaced by random
+   Employee income is treated at person level. Equivalised disposable income
+   is treated once per household on a separate household file and merged
+   back, so all members of a household keep the same value. It is the only
+   household income released; the poverty rate, median and Gini are computed
+   on it.
+5. **Released weight** (below).
+6. **Identifiers.** Person and household identifiers are replaced by random
    numbers; household membership is kept so that household-level analysis
    remains possible.
 
@@ -111,35 +129,125 @@ Each scenario applies, in this order:
 | S3 | NUTS 1 | 10-year bands | grouped | 5 |
 
 S1 shows what happens when the release keeps detail and relies on
-suppression: occupation loses 13,596 values (37% of records) and the run
-takes about 8 minutes. S2 and S3 show that recoding first is cheaper: after
-recoding only 2,669 sample uniques remain, and suppression blanks a few
-thousand values.
+suppression: occupation loses 13,596 values (37% of records) and S1 takes
+about 9 of the 15 minutes of a full run. S2 and S3 show that recoding first
+is cheaper: after recoding only 2,669 sample uniques remain, and suppression
+blanks a few thousand values.
 
-## 5. Information loss
+**Released weight.** The original personal weight takes one value per
+NUTS 2 region in the public file (21 values). Released unchanged, it would
+reveal the NUTS 2 region in S2 and S3, which publish only NUTS 1. The
+released weight is the original weight post-stratified to the released
+region (NUTS 2 in S1, NUTS 1 in S2 and S3). Let `T_r` be the sum of original
+weights of the records whose region at the released level is `r`, `n_r` their
+number, `T` and `n` the national totals, and `s_r` the number of records of
+`r` whose region is blanked in the release. Records with a blanked region all
+get the national weight `w_s = T / n`; the other records of `r` get
+`w_r = (T_r − s_r · w_s) / (n_r − s_r)`. Regional and national totals of the
+weights are preserved exactly; the weight is constant within the released
+region, so it carries no information below it, and the weight of a record
+with a blanked region does not depend on its region. If a region has every
+record blanked, or so many that `w_r` would be zero or negative (`s_r · w_s ≥
+T_r`, possible in a small region), the run stops with an error naming the
+region rather than release such a weight.
+
+The rule has a cost. In S1, where the weight is already constant within each
+NUTS 2 region, it changes the weights only through the records with a
+blanked region: they get the national weight and the other records of their
+region absorb the difference. In a small region the difference can be
+large: in Valle d'Aosta (ITC2), with 49 of 643 records blanked, the weight of
+the other records falls from 166 to 65 (the run would stop at 77 blanked
+records). In S2 and S3 the rule removes the correction for the different
+sampling rates of the NUTS 2 regions inside each NUTS 1 area: Umbria, with about 490 persons per record,
+and Lazio, with about 1,800, get the same weight. This cannot be avoided by
+another choice of weight: a weight that corrects the NUTS 2 composition must
+differ between NUTS 2 regions, and so reveals them. Section 6 measures the
+cost. Real EU-SILC weights also vary within regions by design (non-response
+adjustment and calibration); a production release would calibrate the
+released weight to several published margins, for example sex and age band
+within NUTS 1, and run the release checks of section 5 on the result.
+
+## 5. Release checks
+
+Four checks run on the release file of every scenario before it is written;
+the run stops if one fails. The results are in `output/release_checks.csv`
+and in the report.
+
+- `min_fk_with_weight`: the smallest *f_k* when the released weight is added
+  to the eight keys as a categorical variable. It must be at least *k*. This
+  is the attack that the original weight allowed: as a key it told apart the
+  NUTS 2 regions inside a NUTS 1 area.
+- `weights_spanning_one_nuts2`: the number of released weight values whose
+  records all come from a single NUTS 2 region. It must be 0 in S2 and S3.
+  It does not apply to S1, which publishes NUTS 2, and is reported as not
+  applicable there rather than as passed.
+- `households_inconsistent_keys`: households in which region or household
+  size is blank for some members and not for others. It must be 0.
+- `forbidden_columns`: how many of equivalised household size, household
+  disposable income, the survey person and household identifiers and exact
+  age appear in the release. It must be 0.
+
+Records with a blanked region need a rule in the first two checks. They all
+share the national weight `w_s`, and that value says only that the region is
+blank, which the blank itself already says. In `min_fk_with_weight` their
+weight is therefore treated as blank too, matching any value like their
+region, and in `weights_spanning_one_nuts2` that value is not counted. If
+these records did not share one weight, their weights would be used as they
+are. Without the rule every record with a blanked region would form a group
+of its own under the weight key, and the check would report a group below *k*
+although the weight adds nothing; with the original weights the check still
+fails, as it should.
+
+Results on the 2013 file (all checks pass in every scenario):
+
+| Check | S1 | S2 | S3 |
+|---|---:|---:|---:|
+| `min_fk_with_weight` (k = 3, 3, 5) | 3 | 3 | 5 |
+| `weights_spanning_one_nuts2` | n/a | 0 | 0 |
+| `households_inconsistent_keys` | 0 | 0 | 0 |
+| `forbidden_columns` | 0 | 0 | 0 |
+
+## 6. Information loss
 
 Utility is measured on what a user would compute, using the same code on the
 original and on the protected file.
 
 - **Suppressed values** per key variable and as a share of all key values.
-- **Indicators.** At-risk-of-poverty (AROP) rate, with the threshold at 60%
-  of the national weighted median equivalised disposable income (as in
-  Eurostat's `ilc_li02`), nationally and by NUTS 1; median equivalised
-  income; Gini; mean and median employee income, nationally and by sex.
-  The AROP rate here covers persons aged 16 and over, because only the P
-  file is released.
+- **Indicators.** At-risk-of-poverty (AROP) rate, computed as in Eurostat's
+  `ilc_li02` (threshold at 60% of the national weighted median equivalised
+  disposable income) but on persons aged 16 and over with a personal weight,
+  because only the personal file is released; nationally and by NUTS 1.
+  Median equivalised income; Gini; mean and median employee income,
+  nationally and by sex.
+- **Loss by source.** Each indicator is computed on four files: the
+  original; the original with each record's weight replaced by its released
+  weight (weight effect); the original with employee and equivalised income
+  replaced by their microaggregated values (income effect); and the release
+  file (total effect, which also includes blanked domains). The relative
+  differences from the original are reported side by side. The two partial
+  effects do not add up exactly to the total, because they interact and
+  because records with a blanked region drop out of the NUTS 1 domains.
 - **Regression.** Weighted least squares of log employee income on sex, age
   band and NUTS 1, for employees with positive income. For each coefficient
   the confidence-interval overlap (Karr et al., 2006) is
   `0.5 × (I / (U_o − L_o) + I / (U_p − L_p))`, where `I` is the length of the
-  intersection of the original and protected 95% intervals.
+  intersection of the original and protected 95% intervals. The model is
+  fitted with `lm(weights = weight)`, which treats the sampling weights as
+  precision weights, so the intervals are not design-based; they are kept
+  as a device for comparing the two files, not as valid inference.
 
-Finding: the indicator differences (at most 0.27%) come from
-microaggregation, which is the same in every scenario; key suppression barely
-moves them. The scenarios differ in the detail published and in the number
-of blanked values, which is what the risk-utility map plots.
+Finding: microaggregation moves no indicator by more than 0.27%, in any
+scenario. In S1 the weight effect is at most 0.18%; the largest total change,
+0.46% on the AROP rate of Nord-Est, comes from the records with a blanked
+region, which drop out of the regional figures. In S2 and S3 the weight is
+the dominant source: it moves the AROP rate of Centro by −2.98%, the national
+AROP rate by −0.97% and mean employee income by −2.42%, and the total changes
+are about the same. The confidence-interval overlap of the wage regression
+falls from 0.98 in S1 to 0.79 in S2 and S3 for the same reason. Moving from
+k = 3 to k = 5 leaves the indicators unchanged; the scenarios differ there in
+the number of blanked values, which is what the risk-utility map plots.
 
-## 6. Table protection
+## 7. Table protection
 
 **Table.** Estimated total employee income (income × weight) by region
 (Italy > NUTS 1 > NUTS 2), occupation (ISCO major group) and sex, for
@@ -153,21 +261,67 @@ table has 810 cells.
   contributor, by subtracting its own value from the cell total, could
   estimate the largest contributor's value to within 10%.
 
-**Secondary suppression** (`protectTable`, `SIMPLEHEURISTIC`). A single
-suppressed cell in a row can be recomputed as the row total minus the
-published cells. The algorithm hides further cells, across the region
-hierarchy and both margins, until every sensitive cell is protected.
+**Secondary suppression** (`protectTable`). A single suppressed cell in a
+row can be recomputed as the row total minus the published cells, so further
+cells are hidden across the region hierarchy and the other two dimensions.
+sdcTable's quick heuristic (`SIMPLEHEURISTIC`) is tried first, then its
+optimisation method (`OPT`); the first pattern that passes the audit below is
+published.
 
-**Audit** (`attack`). For each sensitive cell, sdcTable solves the
-intruder's problem: the minimum and maximum value the cell can take given
-every published cell and the additivity of the table. A cell is protected if
-the maximum is larger than the minimum. sdcTable runs the attack on the
-contributor counts; whether a cell can be recomputed *exactly* depends only
-on which cells are suppressed, so the result carries over to the income
-values. With only primary suppressions, all 27 sensitive cells can be
-recomputed exactly; with the secondary suppressions, none can.
+**Audit.** The audit is independent of sdcTable and works on income, the
+published variable. The unknowns are the 810 cells. The constraints are the
+sums of the table, for every combination of the other two dimensions: Italy
+equals the sum of the NUTS 1 areas, each NUTS 1 area the sum of its NUTS 2
+regions (parent equal to child when an area has a single region), the
+occupation total the sum of the nine groups, the sex total men plus women.
+Published cells are fixed at their value; suppressed cells are only required
+to be non-negative. For each sensitive cell two linear programs (solved with
+HiGHS) give the lowest and highest value the cell can take, `L` and `U`: the
+interval an intruder can derive from the published table.
 
-## 7. Limitations and next steps
+The interval must be wide enough for the p% rule (Hundepool et al., 2012).
+With `X` the cell value and `x1 ≥ x2` its two largest contributions, the
+protection level is
+
+`PL = max(0, p/100 · x1 − (X − x1 − x2))`,
+
+the smallest error the second-largest contributor must be left with when
+estimating the largest contribution from the cell value; with less, it could
+estimate `x1` to within p%. The cell is protected if `U − X ≥ PL` and
+`X − L ≥ PL` (relative tolerance 10⁻⁹ · X). The same formula is applied to
+cells sensitive under the threshold rule: with one contributor `PL` is p% of
+the cell value, with two it is p% of the larger contribution.
+
+**Additions driven by the audit.** sdcTable's protection levels act on the
+number of contributors, not on income, so a pattern it accepts can leave the
+income interval of a sensitive cell narrower than `PL`. When the `OPT` pattern
+fails the audit, cells are added to it. A single extra cell never helps:
+every cell sits in three sums and stays recomputable from the other two.
+The candidates are therefore suppression structures around the failing cell
+`c = (r, o, s)`: the corners of the rectangles {r, r'} × {o, o'}, {r, r'} ×
+{s, s'} and {o, o'} × {s, s'} and of the cubes {r, r'} × {o, o'} × {s, s'},
+where r' is a region with the same parent, o' another occupation and s' the
+other sex; for a margin cell, the sibling is paired with a chain of children
+so that the margin can move. Structures with an empty cell are skipped. Each
+round takes the failing cell with the largest shortfall, hides the structure
+that protects it at the least income newly hidden (if none does, the one
+that widens its interval most) and runs the audit again. Extra suppressions
+only widen intervals, so cells already protected stay protected; if no
+structure widens the interval, the run stops.
+
+On the 2013 file both `SIMPLEHEURISTIC` and `OPT` leave sensitive cells
+with intervals narrower than `PL`, so the published pattern is the `OPT`
+pattern plus 13 cells added by the audit: 27 primary and 64 secondary
+suppressions out of 810 cells, hiding 4.9% of the income of the detailed
+cells. With the primary suppressions alone none of the 27 sensitive cells is
+protected; with the secondary suppressions all 27 are.
+
+The public outputs give the suppression pattern and, for each sensitive
+cell, only whether it is protected; the cell values, contributions and
+intervals used by the audit are kept out of the published outputs, because
+they would let an intruder narrow down the suppressed values.
+
+## 8. Limitations and next steps
 
 - **Synthetic source.** The risk levels describe the synthetic file only.
 - **One intruder scenario.** Risk depends on the key set. A sensitivity
@@ -175,13 +329,15 @@ recomputed exactly; with the secondary suppressions, none can.
 - **Outliers.** Microaggregation in groups of 3 still releases values close
   to the top incomes. A production release would add top-coding checked
   against the income distribution, or noise on the top tail.
-- **Width of the protection intervals.** The audit checks that no cell can
-  be recomputed exactly. A stricter check would require each interval to be
-  wide enough relative to the cell value (the protection level used by
-  τ-ARGUS).
-- **Secondary suppression method.** `SIMPLEHEURISTIC` is fast but does not
-  minimise the information hidden; `OPT` or τ-ARGUS's modular method usually
-  hide less.
+- **Released weight.** The weight is constant within each released region.
+  Real EU-SILC weights vary within regions by design; a production release
+  would calibrate to several published margins and check the result with the
+  same release checks. In S2 and S3 no released weight can restore the
+  NUTS 2 composition without revealing NUTS 2 (section 4).
+- **Secondary suppression method.** The cells added after the audit are
+  chosen one failing cell at a time, so the final pattern is protected but
+  not minimal. sdcTable's protection levels work on counts; τ-ARGUS's
+  modular method with protection levels on income would usually hide less.
 - **Not covered.** PRAM (randomised response on categorical variables) and
   synthetic data generation, which are the other main families of methods.
 
