@@ -90,7 +90,7 @@ harmonise_household_keys <- function(obj, vars = c("region", "hh_size")) {
 }
 
 # Run one scenario. Returns the risk after each step, the final sdcMicro
-# object and the release file.
+# object, the protected file (with survey ids) and the release file.
 run_scenario <- function(persons, scenario, hh_income_protected, seed = 2026) {
   df <- as_sdc_input(persons, scenario$region)
   obj <- new_sdc(df, num_vars = "emp_income", seed = seed)
@@ -104,32 +104,45 @@ run_scenario <- function(persons, scenario, hh_income_protected, seed = 2026) {
   final <- risk_summary(obj, scenario$label)[, step := "after local suppression"]
   suppressions <- suppression_summary(recoded_keys, sdcMicro::get.sdcMicroObj(obj, "manipKeyVars"),
                                       scenario$label)
+  protected <- protected_file(obj, hh_income_protected, scenario$region)
   list(risk = rbind(after_recoding, final), obj = obj, suppressions = suppressions,
-       release = build_release(obj, hh_income_protected, seed))
+       protected = protected, release = build_release(protected, seed))
 }
 
-build_release <- function(obj, hh_income_protected, seed = 2026) {
+RELEASE_COLUMNS <- c("person_release_id", "hh_release_id", "region", "nuts1", "sex", "age_band",
+                     "marital", "citizenship", "isced", "isco1", "hh_size", "activity",
+                     "emp_income", "eq_income", "weight")
+
+# The protected file: the release columns with the survey person and
+# household ids still attached, for checks and utility measures. The weight
+# is the released weight, constant within the released region.
+protected_file <- function(obj, hh_income_protected, region_level = c("nuts2", "nuts1")) {
+  region_level <- match.arg(region_level)
   rel <- data.table::as.data.table(sdcMicro::extractManipData(obj))
   # extractManipData() turns a recoded numeric key back into integer codes;
   # take the labelled keys straight from the object instead.
   keys <- sdcMicro::get.sdcMicroObj(obj, "manipKeyVars")
   for (v in KEY_VARS) set(rel, j = v, value = keys[[v]])
+  # Character vectors, so that an error names the region, not a factor code.
+  rel[, weight := release_weights(as.character(get(region_level)), as.character(region), weight)]
   rel[, hh_id := as.character(hh_id)]
-  rel[, c("eq_size", "hh_disp_income", "eq_income") := NULL]
+  rel[, eq_income := NULL]
   rel <- merge(rel, hh_income_protected, by = "hh_id", all.x = TRUE)
   rel[, nuts1 := substr(as.character(region), 1, 3)]
   rel[, age_band := age]
+  keep <- c("person_id", "hh_id", setdiff(RELEASE_COLUMNS, c("person_release_id", "hh_release_id")))
+  rel[, ..keep]
+}
 
-  # Replace survey identifiers with random numbers.
+# Replace survey identifiers with random numbers and keep the release columns.
+build_release <- function(protected, seed = 2026) {
+  rel <- data.table::copy(protected)
   set.seed(seed)
   hh_map <- data.table(hh_id = unique(rel$hh_id))
   hh_map[, hh_release_id := sample.int(.N)]
   rel <- merge(rel, hh_map, by = "hh_id")
   rel[, person_release_id := sample.int(.N)]
-  keep <- c("person_release_id", "hh_release_id", "region", "nuts1", "sex", "age_band",
-            "marital", "citizenship", "isced", "isco1", "hh_size", "activity",
-            "emp_income", "eq_income", "weight")
-  rel <- rel[, ..keep]
+  rel <- rel[, ..RELEASE_COLUMNS]
   data.table::setorder(rel, hh_release_id, person_release_id)
   rel[]
 }

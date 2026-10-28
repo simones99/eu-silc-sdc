@@ -1,5 +1,6 @@
 persons <- make_persons(300)
 hh_income <- protect_household_income(build_household_file(persons))
+runs <- lapply(SCENARIOS, function(sc) run_scenario(persons, sc, hh_income))
 
 test_that("equivalised income microaggregation preserves the mean and the ranking", {
   hh <- build_household_file(persons)
@@ -12,7 +13,7 @@ test_that("equivalised income microaggregation preserves the mean and the rankin
 })
 
 test_that("scenario S3 reaches 5-anonymity on the key variables", {
-  res <- run_scenario(persons, SCENARIOS$S3, hh_income)
+  res <- runs$S3
   final <- res$risk[step == "after local suppression"]
   expect_equal(final$violating_5_anonymity, 0)
   expect_equal(final$sample_uniques, 0)
@@ -20,25 +21,49 @@ test_that("scenario S3 reaches 5-anonymity on the key variables", {
              res$risk[step == "after global recoding", expected_reidentifications])
 })
 
-test_that("release file has no survey identifiers and coherent households", {
-  rel <- run_scenario(persons, SCENARIOS$S2, hh_income)$release
-  expect_false(any(c("person_id", "hh_id", "age") %in% names(rel)))
+test_that("release file has exactly the release columns and coherent households", {
+  rel <- runs$S2$release
+  expect_equal(names(rel), c("person_release_id", "hh_release_id", "region", "nuts1", "sex",
+                             "age_band", "marital", "citizenship", "isced", "isco1", "hh_size",
+                             "activity", "emp_income", "eq_income", "weight"))
   expect_equal(nrow(rel), nrow(persons))
   expect_true(all(stats::na.omit(as.character(rel$age_band)) %in% AGE_BREAKS$`10`$labels))
   # One household income per household.
-  expect_false(any(c("eq_size", "hh_disp_income") %in% names(rel)))
   expect_equal(rel[, data.table::uniqueN(eq_income), by = hh_release_id][, max(V1)], 1)
   expect_setequal(stats::na.omit(unique(as.character(rel$isced))),
                   c("Low (0-2)", "Medium (3-4)", "High (5-6)"))
 })
 
+test_that("the protected file keeps person_id for every person", {
+  prot <- runs$S2$protected
+  expect_true("person_id" %in% names(prot))
+  expect_equal(nrow(prot), nrow(persons))
+  expect_setequal(prot$person_id, persons$person_id)
+})
+
+test_that("released weights preserve the national total in every scenario", {
+  for (id in names(runs)) {
+    expect_equal(sum(runs[[id]]$release$weight), sum(persons$weight), tolerance = 1e-8, info = id)
+  }
+})
+
+test_that("released weights preserve totals by original NUTS 1 in S2", {
+  prot <- runs$S2$protected
+  joined <- merge(prot[, .(person_id, weight)], persons[, .(person_id, nuts1, weight_original = weight)],
+                  by = "person_id")
+  tot <- joined[, .(released = sum(weight), original = sum(weight_original)), by = nuts1]
+  expect_equal(tot$released, tot$original, tolerance = 1e-8)
+})
+
 test_that("employee income is microaggregated, not released exactly", {
-  rel <- run_scenario(persons, SCENARIOS$S2, hh_income)$release
-  positive <- rel$emp_income[rel$emp_income > 0]
+  res <- runs$S2
+  positive <- res$release$emp_income[res$release$emp_income > 0]
   original <- persons$emp_income[persons$emp_income > 0]
   expect_lt(mean(positive %in% original), 0.5)
-  expect_equal(sum(rel$emp_income * rel$weight), sum(persons$emp_income * persons$weight),
-               tolerance = 0.02)
+  joined <- merge(res$protected[, .(person_id, emp_income)],
+                  persons[, .(person_id, weight_original = weight)], by = "person_id")
+  expect_equal(sum(joined$emp_income * joined$weight_original),
+               sum(persons$emp_income * persons$weight), tolerance = 0.02)
 })
 
 test_that("a household key suppressed for one member is suppressed for all", {
