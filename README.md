@@ -79,7 +79,8 @@ secondary suppressions.
 
 ## Run it
 
-Requires R 4.2 or later. Package versions are pinned in `renv.lock`.
+Requires R 4.2 or later. Package versions are pinned in `renv.lock`. On
+macOS, sdcTable needs GLPK (`brew install glpk`) when built from source.
 
 ```sh
 Rscript -e 'renv::restore()'            # installs the pinned packages

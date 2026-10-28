@@ -258,8 +258,9 @@ With the released weight added to the keys, the smallest group has
 `r fmt(fk_w[["S3"]])` in S3, so the claim that S3 leaves no combination shared
 by fewer than 5 records holds for the weight too. Records with a blanked
 region all share one national weight, which says only what the blank already
-says, so in these checks their weight matches any value, like their region
-(were their weights different, they would be checked as they are).
+says, so in the group check their weight matches any value, like their
+region, and in the NUTS 2 check that value is not counted (were their
+weights different, they would be checked as they are).
 
 ## Information loss
 
@@ -468,13 +469,23 @@ ggplot(p, aes(x = occupation, y = region, fill = status)) +
   theme_report + theme(panel.grid.major = element_blank())
 ```
 
+```{r pattern-groups}
+isco_names <- c(`0-1` = "managers", `2` = "professionals", `3` = "technicians",
+                `4` = "clerical support workers", `5` = "service and sales workers",
+                `6` = "skilled agricultural workers", `7` = "craft workers",
+                `8` = "plant and machine operators", `9` = "elementary occupations")
+groups_of <- function(who) {
+  g <- p[status == "Primary suppression" & sex == who, .N, by = occupation][order(-N, occupation)]
+  paste0(g$N, " for ", isco_names[g$occupation], " (group ", g$occupation, ")", collapse = ", ")
+}
+```
+
 `r sum(p$status == "Primary suppression" & p$sex == "Women")` of the
 `r sum(p$status == "Primary suppression")` sensitive detailed cells are for
-women: occupations with few female employees (skilled agricultural workers,
-group 6; plant and machine operators, group 8; managers, groups 0-1) in small
-or southern regions. Secondary suppressions fall on the matching cells for
-men and on neighbouring regions, so that no row or column total can be used
-to recover them.
+women, in occupations with few female employees: `r groups_of("Women")`.
+For men there are `r groups_of("Men")`. The secondary suppressions,
+including the cells added by the audit, keep the interval of every
+sensitive cell at least as wide as its p% protection level on both sides.
 
 ## Limitations
 
