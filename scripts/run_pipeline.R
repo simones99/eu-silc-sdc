@@ -7,6 +7,13 @@
 # Outputs go to output/ (public: the publish workflow uploads output/*.csv and
 # run_info.json); full table audit detail goes to output/internal/ (not published).
 # The report (reports/report.Rmd) reads them.
+#
+# Only one scenario is released. The scenarios are built from the same
+# records, so their release files would link record by record and, joined,
+# undo each other's protection. The release files of the other scenarios are
+# comparison runs and stay in output/internal/.
+
+PUBLISHED_SCENARIO <- "S3"
 
 suppressMessages(pkgload::load_all(".", quiet = TRUE))
 
@@ -15,6 +22,8 @@ scenario_ids <- if (length(args)) args else names(SCENARIOS)
 dir.create("output", showWarnings = FALSE)
 dir.create("output/internal", showWarnings = FALSE)
 write_out <- function(x, name) data.table::fwrite(x, file.path("output", name))
+# Remove release files of unpublished scenarios left by earlier runs.
+unlink(file.path("output", sprintf("release_%s.csv", setdiff(names(SCENARIOS), PUBLISHED_SCENARIO))))
 
 manifest <- read_manifest()
 zip_path <- download_puf(manifest)
@@ -34,6 +43,7 @@ suppressions <- list()
 indicators <- list()
 overlap <- list()
 checks <- list()
+passes <- list()
 for (id in scenario_ids) {
   sc <- SCENARIOS[[id]]
   message("Running ", sc$label)
@@ -41,6 +51,8 @@ for (id in scenario_ids) {
   res <- run_scenario(persons, sc, hh_income)
   message(sprintf("  done in %.1f minutes", as.numeric(difftime(Sys.time(), t0, units = "mins"))))
 
+  message(sprintf("  local suppression passes: %d", res$suppression_passes))
+  passes[[id]] <- res$suppression_passes
   risk[[id]] <- res$risk
   suppressions[[id]] <- res$suppressions
 
@@ -56,7 +68,8 @@ for (id in scenario_ids) {
   indicators[[id]] <- loss_by_source(persons, res$protected, res$release, sc$label)
   overlap[[id]] <- ci_overlap(fit_wage_model(original),
                               fit_wage_model(res$release))[, scenario := sc$label]
-  write_out(res$release, sprintf("release_%s.csv", id))
+  release_dir <- if (id == PUBLISHED_SCENARIO) "" else "internal/"
+  write_out(res$release, sprintf("%srelease_%s.csv", release_dir, id))
 }
 
 write_out(data.table::rbindlist(risk, use.names = TRUE), "risk.csv")
@@ -102,7 +115,8 @@ jsonlite::write_json(list(
   year = manifest$year_used, persons = nrow(persons),
   households = data.table::uniqueN(persons$hh_id),
   table_method = tab$method, table_cells_added = nrow(tab$added),
-  scenarios = scenario_ids, sdcMicro = as.character(utils::packageVersion("sdcMicro")),
+  scenarios = scenario_ids, published_scenario = PUBLISHED_SCENARIO,
+  suppression_passes = passes, sdcMicro = as.character(utils::packageVersion("sdcMicro")),
   sdcTable = as.character(utils::packageVersion("sdcTable")),
   run_at = format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z")
 ), "output/run_info.json", auto_unbox = TRUE, pretty = TRUE)

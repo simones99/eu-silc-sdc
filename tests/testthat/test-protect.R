@@ -78,6 +78,24 @@ test_that("a household key suppressed for one member is suppressed for all", {
   expect_false(any(is.na(out$region[hh != hh[1]])))
 })
 
+test_that("protection never leaves household size blank", {
+  # The source has no missing household size, so any blank is a suppression.
+  expect_false(anyNA(persons$hh_size))
+  for (id in names(runs)) {
+    expect_equal(sum(is.na(runs[[id]]$release$hh_size)), 0, info = id)
+    expect_equal(runs[[id]]$suppressions[variable == "hh_size", suppressed], 0L, info = id)
+    expect_gte(runs[[id]]$suppression_passes, 1)
+  }
+})
+
+test_that("suppression stops when household size is still blank after the last pass", {
+  sc <- SCENARIOS$S3
+  obj <- recode_keys(new_sdc(as_sdc_input(persons, sc$region)), sc)
+  recoded <- sdcMicro::get.sdcMicroObj(obj, "manipKeyVars")
+  expect_error(suppress_keeping_hh_size(obj, sc$k, recoded, max_passes = 1),
+               "household size")
+})
+
 test_that("suppression_summary counts only values blanked by protection", {
   recoded <- as.data.frame(setNames(rep(list(c("a", "b", "c")), length(KEY_VARS)), KEY_VARS))
   recoded$isco1[1] <- NA                       # missing in the source
@@ -89,4 +107,12 @@ test_that("suppression_summary counts only values blanked by protection", {
   expect_equal(s[variable == "hh_size", suppressed], 1L)
   expect_equal(s[variable == "isco1", suppressed], 0L)
   expect_equal(sum(s$suppressed), 2L)
+})
+
+test_that("release ids differ between scenarios", {
+  # S2 and S3 release the same household incomes; with the same random ids
+  # the two files would link household by household.
+  ids <- function(rel) unique(rel[, .(hh_release_id, eq_income)])
+  joined <- merge(ids(runs$S2$release), ids(runs$S3$release), by = "hh_release_id")
+  expect_lt(mean(joined$eq_income.x == joined$eq_income.y, na.rm = TRUE), 0.1)
 })

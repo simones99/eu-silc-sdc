@@ -6,7 +6,8 @@ test_that("every scenario passes the release checks", {
   for (id in names(runs)) {
     ch <- release_checks(runs[[id]]$protected, runs[[id]]$release, persons, SCENARIOS[[id]])
     expect_equal(ch$check, c("min_fk_with_weight", "weights_spanning_one_nuts2",
-                             "households_inconsistent_keys", "forbidden_columns"))
+                             "households_inconsistent_keys", "hh_size_blanked",
+                             "forbidden_columns"))
     expect_false(any(ch$pass %in% FALSE), info = id)
   }
 })
@@ -23,7 +24,7 @@ test_that("the checks catch the original weight and a forbidden column", {
   rel <- build_release(prot)
   rel[, eq_size := 1]
   ch <- release_checks(prot, rel, persons, SCENARIOS$S3)
-  expect_true(any(ch[check %in% c("min_fk_with_weight", "weights_spanning_one_nuts2"), pass] %in% FALSE))
+  expect_false(ch[check == "min_fk_with_weight", pass])
   expect_equal(ch[check == "forbidden_columns", value], 1)
   expect_false(ch[check == "forbidden_columns", pass])
 })
@@ -55,4 +56,14 @@ test_that("households with a key missing for some members only are counted", {
   ch <- release_checks(runs$S2$protected, rel, persons, SCENARIOS$S2)
   expect_equal(ch[check == "households_inconsistent_keys", value], 1)
   expect_false(ch[check == "households_inconsistent_keys", pass])
+})
+
+test_that("a blank household size in the release is counted", {
+  rel <- data.table::copy(runs$S3$release)
+  hh <- rel[, .N, by = hh_release_id][N >= 2, hh_release_id][1]
+  rel[hh_release_id == hh, hh_size := NA]
+  ch <- release_checks(runs$S3$protected, rel, persons, SCENARIOS$S3)
+  expect_equal(ch[check == "hh_size_blanked", value], sum(rel$hh_release_id == hh))
+  expect_false(ch[check == "hh_size_blanked", pass])
+  expect_true(ch[check == "households_inconsistent_keys", pass])
 })

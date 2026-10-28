@@ -99,12 +99,23 @@ Each scenario applies, in this order:
 2. **Local suppression** (`localSuppression`). sdcMicro blanks individual
    key values, choosing those that break the most unsafe combinations, until
    the file is k-anonymous. The importance vector makes region and sex the
-   last candidates, then age and household size; occupation goes first.
-3. **Household-consistent suppression.** Region and household size are
-   household characteristics, and the release keeps a household identifier,
-   so a value blanked for one member could be read from another member of
-   the same household. After local suppression, if either key is blank for
-   any member, it is blanked for every member, and the risk is recomputed
+   last candidates, then age; occupation goes first. Household size is never
+   left blank: the number of members a household has in the release gives
+   its size exactly in the top class and a lower bound otherwise, so a blank
+   would protect little. After each pass, household sizes blanked by
+   suppression are restored and local suppression runs again with household
+   size as the last candidate. sdcMicro still blanks household size when it
+   is the only key that tells a record apart from its nearest records; from
+   the second pass on, such a record also loses its least important key not
+   yet blank (occupation, then citizenship, marital status, education, age,
+   region, sex). Each pass removes detail, so the loop ends; it stops with an
+   error after 10 passes. On the 2013 file it takes 4 passes in S1 and S2
+   and 2 in S3 (`suppression_passes` in `run_info.json`).
+3. **Household-consistent suppression.** Region is a household
+   characteristic, and the release keeps a household identifier, so a value
+   blanked for one member could be read from another member of the same
+   household. After local suppression, if region is blank for any member, it
+   is blanked for every member, and the risk is recomputed
    (`calcRisks`). A blank matches any value, so the extra blanks can only
    enlarge groups and k-anonymity is preserved. The suppression counts
    compare the final keys with the recoded keys, so they include these extra
@@ -169,7 +180,7 @@ within NUTS 1, and run the release checks of section 5 on the result.
 
 ## 5. Release checks
 
-Four checks run on the release file of every scenario before it is written;
+Five checks run on the release file of every scenario before it is written;
 the run stops if one fails. The results are in `output/release_checks.csv`
 and in the report.
 
@@ -183,6 +194,8 @@ and in the report.
   applicable there rather than as passed.
 - `households_inconsistent_keys`: households in which region or household
   size is blank for some members and not for others. It must be 0.
+- `hh_size_blanked`: the number of records whose household size is blank in
+  the release. It must be 0.
 - `forbidden_columns`: how many of equivalised household size, household
   disposable income, the survey person and household identifiers and exact
   age appear in the release. It must be 0.
@@ -334,6 +347,12 @@ they would let an intruder narrow down the suppressed values.
   would calibrate to several published margins and check the result with the
   same release checks. In S2 and S3 no released weight can restore the
   NUTS 2 composition without revealing NUTS 2 (section 4).
+- **Blanked regions and regional totals.** The released weights keep each
+  region's total, and records with a blanked region carry the national
+  weight. Anyone who knows the official NUTS 1 population totals can
+  therefore work out how many records with a blanked region belong to each
+  NUTS 1 area, though not which ones. On the 2013 file 7 records in S3 have
+  their region blanked: 1 in ITC, 1 in ITF and 5 in ITG.
 - **Secondary suppression method.** The cells added after the audit are
   chosen one failing cell at a time, so the final pattern is protected but
   not minimal. sdcTable's protection levels work on counts; τ-ARGUS's

@@ -45,6 +45,21 @@ orig <- risk[step == "no protection"]
 final <- risk[step == "after local suppression"]
 n_keys <- 8
 scen_short <- function(x) sub(":.*", "", x)
+# One value per scenario, named by scenario id; "n/a" for a scenario that the
+# run did not include (the pipeline can run a subset of the scenarios).
+by_sc <- function(dt, col) setNames(dt[[col]], scen_short(dt$scenario))
+for_sc <- function(x, id, f = fmt, ...) {
+  if (id %in% names(x) && !is.na(x[[id]])) f(x[[id]], ...) else "n/a"
+}
+published <- if (is.null(info$published_scenario)) "S3" else info$published_scenario
+mx_tab <- ind[, .(scenario = scenario[1], w = max(abs(rel_diff_weight_pct)),
+                  i = max(abs(rel_diff_income_pct)), t = max(abs(rel_diff_pct))),
+              by = .(sc = scen_short(scenario))]
+mx_w <- by_sc(mx_tab, "w")
+mx_i <- by_sc(mx_tab, "i")
+mx_t <- by_sc(mx_tab, "t")
+er_final <- by_sc(final, "expected_reidentifications")
+label_final <- by_sc(final, "scenario")
 ```
 
 <div class="alert alert-warning" role="note">
@@ -73,14 +88,16 @@ households) as if it were the confidential source.
   expected re-identifications.
 - Three protection scenarios were compared. All of them remove every sample
   unique. They differ in how much detail they sacrifice to get there.
-- The recommended scenario, **`r final[scenario %like% "^S3", scenario]`**,
+- The recommended scenario, **`r for_sc(label_final, "S3", identity)`**,
   leaves no combination shared by fewer than 5 records, also when the
   released weight is added to the keys, and reduces expected
-  re-identifications to `r fmt(final[scenario %like% "^S3", expected_reidentifications], 2)`.
+  re-identifications to `r for_sc(er_final, "S3", fmt, 2)`.
   It changes the income and poverty indicators by at most
-  `r pct(ind[scenario %like% "^S3", max(abs(rel_diff_pct))], 2)`, almost all of
+  `r for_sc(mx_t, "S3", pct, 2)`, almost all of
   it because the released weight can no longer differ between the NUTS 2
-  regions of a NUTS 1 area.
+  regions of a NUTS 1 area. Only this scenario is released; the other two
+  are comparison runs, shown here only through their aggregate risk and loss
+  measures.
 - In the table of employee income by region, occupation and sex,
   `r tab_sum$primary` cells are sensitive and `r tab_sum$secondary` more
   are hidden so that no sensitive cell can be estimated too closely from the
@@ -175,9 +192,11 @@ Each scenario applies three standard methods in this order (Hundepool et al.,
 2. **Local suppression**: individual key values are blanked, choosing the
    values that break the most risky combinations, until every combination is
    shared by at least *k* records. Region, sex and age are suppressed last
-   because they matter most to users. Region and household size describe the
-   household, and the release keeps a household identifier, so a value
-   blanked for one member is blanked for every member of the household.
+   because they matter most to users. Household size is never blanked: the
+   number of members a household has in the release would give it back.
+   Region describes the household, and the release keeps a household
+   identifier, so a region blanked for one member is blanked for every member
+   of the household.
 3. **Microaggregation** (MDAV, groups of 3) of the two income variables: each
    value is replaced by the mean of a group of three similar values, so no
    exact income is released. Equivalised income is treated once per
@@ -224,7 +243,7 @@ has to blank many more values to reach the same guarantee.
 
 ### Release checks
 
-Before a release file is written, four checks run on it; the pipeline stops
+Before a release file is written, five checks run on it; the pipeline stops
 if one fails.
 
 - **Smallest group with the weight as a key** (`min_fk_with_weight`): the
@@ -236,6 +255,8 @@ if one fails.
 - **Households with inconsistent keys** (`households_inconsistent_keys`):
   households where region or household size is blank for some members and
   not for others. It must be 0.
+- **Blank household size** (`hh_size_blanked`): records whose household size
+  is blank in the release. It must be 0.
 - **Forbidden columns** (`forbidden_columns`): equivalised household size,
   household disposable income, survey identifiers or exact age in the
   release. It must be 0.
@@ -254,9 +275,12 @@ fk_w <- checks[check == "min_fk_with_weight", setNames(value, scen_short(scenari
 ```
 
 With the released weight added to the keys, the smallest group has
-`r fmt(fk_w[["S1"]])` records in S1, `r fmt(fk_w[["S2"]])` in S2 and
-`r fmt(fk_w[["S3"]])` in S3, so the claim that S3 leaves no combination shared
-by fewer than 5 records holds for the weight too. Records with a blanked
+`r for_sc(fk_w, "S1")` records in S1, `r for_sc(fk_w, "S2")` in S2 and
+`r for_sc(fk_w, "S3")` in S3. Because the released weight is one value per
+released region plus one national value for blanked regions, this check
+gives the same result as k-anonymity on the eight keys alone: it shows that
+the weight adds no detail to the keys, not a second, independent guarantee.
+Records with a blanked
 region all share one national weight, which says only what the blank already
 says, so in the group check their weight matches any value, like their
 region, and in the NUTS 2 check that value is not counted (were their
@@ -306,23 +330,23 @@ because they interact and because records with a blanked region drop out of
 the regional figures.
 
 ```{r indicator-sources}
-mx <- ind[, .(w = max(abs(rel_diff_weight_pct)), i = max(abs(rel_diff_income_pct)),
-              t = max(abs(rel_diff_pct))), by = .(sc = scen_short(scenario))]
-mx <- setNames(split(mx, mx$sc), mx$sc)
 top <- ind[scen_short(scenario) == "S3"][which.max(abs(rel_diff_weight_pct))]
 nuts1_names <- c(ITC = "Nord-Ovest", ITF = "Sud", ITG = "Isole", ITH = "Nord-Est", ITI = "Centro")
-top_domain <- if (top$domain %in% names(nuts1_names)) paste0(top$domain, ", ", nuts1_names[[top$domain]]) else top$domain
+top_text <- if (nrow(top) == 0) "n/a" else {
+  d <- if (top$domain %in% names(nuts1_names)) paste0(top$domain, ", ", nuts1_names[[top$domain]]) else top$domain
+  paste0(top$indicator, ", ", d)
+}
 ```
 
 Microaggregation is the same in every scenario and moves no indicator by
-more than `r pct(mx$S3$i, 2)`. In S1 the weight changes only through the
+more than `r for_sc(mx_i, "S3", pct, 2)`. In S1 the weight changes only through the
 records with a blanked region, which get the national weight while the rest
 of their region absorbs the difference; its effect is at most
-`r pct(mx$S1$w, 2)`. In S2
+`r for_sc(mx_w, "S1", pct, 2)`. In S2
 and S3 the weight is the larger source: it is constant within each NUTS 1
 area, so it no longer corrects for the different sampling rates of the NUTS 2
 regions inside an area, and it moves indicators by up to
-`r pct(mx$S3$w, 2)` (`r top$indicator`, `r top_domain`). That is the price
+`r for_sc(mx_w, "S3", pct, 2)` (`r top_text`). That is the price
 of not revealing NUTS 2 through the weight.
 
 ```{r indicators, results = "asis"}
@@ -387,7 +411,7 @@ categories than S1 for every record.
 with the weight included, with far fewer suppressions than S1 because
 recoding removed the rare categories first. Its cost is in the weight: S2
 and S3 publish NUTS 1, so the weight cannot reflect NUTS 2, and indicators
-move by up to `r pct(mx$S3$t, 2)` instead of `r pct(mx$S1$t, 2)` in S1.
+move by up to `r for_sc(mx_t, "S3", pct, 2)` instead of `r for_sc(mx_t, "S1", pct, 2)` in S1.
 Moving from S2 to S3 (k = 3 to k = 5) leaves the indicators as in S2,
 roughly doubles the suppressions and removes the remaining records that share
 their combination with only 3 or 4 others. S1 keeps regional detail but must
@@ -500,6 +524,10 @@ sensitive cell at least as wide as its p% protection level on both sides.
   EU-SILC weights vary within regions by design; a production release would
   calibrate the weights to several published margins (for example sex and
   age band within NUTS 1) and run the same release checks on the result.
+- The released weights keep each region's total, and records with a blanked
+  region carry the national weight. Anyone who knows the official NUTS 1
+  population totals can therefore work out how many records with a blanked
+  region belong to each NUTS 1 area, though not which ones.
 - The cells added after the audit are chosen one failing cell at a time; the
   final pattern is protected but not minimal. τ-ARGUS's modular method with
   income-based protection levels would usually hide less.

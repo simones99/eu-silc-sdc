@@ -32,10 +32,14 @@ release_checks <- function(protected, release, persons, scenario) {
                                     (any(is.na(hh_size)) && !all(is.na(hh_size)))),
                           by = hh_release_id][, sum(bad)]
 
+  # Household size is never suppressed: the number of members would undo it.
+  hh_size_blank <- sum(is.na(release$hh_size))
+
   forbidden <- sum(FORBIDDEN_COLUMNS %in% names(release))
 
   data.table(check = c("min_fk_with_weight", "weights_spanning_one_nuts2",
-                       "households_inconsistent_keys", "forbidden_columns"),
-             value = as.numeric(c(min_fk, spanning, inconsistent, forbidden)),
-             pass = c(min_fk >= scenario$k, spanning == 0, inconsistent == 0, forbidden == 0))
+                       "households_inconsistent_keys", "hh_size_blanked", "forbidden_columns"),
+             value = as.numeric(c(min_fk, spanning, inconsistent, hh_size_blank, forbidden)),
+             pass = c(min_fk >= scenario$k, spanning == 0, inconsistent == 0, hh_size_blank == 0,
+                      forbidden == 0))
 }
