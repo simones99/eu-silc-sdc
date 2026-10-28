@@ -32,3 +32,28 @@ test_that("ci_overlap is 1 for identical fits and 0 for disjoint intervals", {
   d2$y <- d2$y + 100
   expect_equal(ci_overlap(f, lm(y ~ x, d2))$overlap[1], 0, ignore_attr = TRUE)
 })
+
+test_that("loss_by_source is zero when nothing changes", {
+  p <- make_persons(100)
+  l <- loss_by_source(p, p, p, "none")
+  expect_equal(unique(c(l$rel_diff_weight_pct, l$rel_diff_income_pct, l$rel_diff_pct)), 0)
+})
+
+test_that("loss_by_source attributes a weight change to the weight only", {
+  p <- make_persons(100)
+  prot <- data.table::copy(p)[, weight := ave(weight, nuts1)]
+  l <- loss_by_source(p, prot, prot, "w")
+  expect_true(all(l$rel_diff_income_pct == 0))
+  expect_true(any(l$rel_diff_weight_pct != 0))
+  expect_equal(l$rel_diff_weight_pct, l$rel_diff_pct)
+})
+
+test_that("loss_by_source joins by person_id and tolerates a suppressed nuts1", {
+  p <- make_persons(100)
+  prot <- data.table::copy(p)[, emp_income := emp_income * 1.1][sample(.N)]
+  rel <- data.table::copy(prot)[1:5, nuts1 := NA]
+  l <- loss_by_source(p, prot, rel, "inc")
+  expect_true(all(l$rel_diff_weight_pct == 0))
+  expect_true(any(l$rel_diff_income_pct != 0))
+  expect_equal(l$scenario, rep("inc", nrow(l)))
+})

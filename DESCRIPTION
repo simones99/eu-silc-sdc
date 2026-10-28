@@ -14,6 +14,7 @@ Imports:
     data.table,
     digest,
     ggplot2,
+    highs,
     jsonlite,
     pkgload,
     sdcHierarchies,
@@ -22,6 +23,7 @@ Imports:
 Suggests:
     knitr,
     rmarkdown,
+    scales,
     testthat (>= 3.0.0),
     withr
 Config/testthat/edition: 3

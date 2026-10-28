@@ -1,12 +1,20 @@
 # Small synthetic person file with the same columns as build_person_file().
 make_persons <- function(n_hh = 300, seed = 1) {
   set.seed(seed)
-  nuts2 <- c("ITC1", "ITC4", "ITH5", "ITI4", "ITF3", "ITG1")
+  nuts2 <- c("ITC1", "ITC4", "ITH3", "ITH5", "ITI1", "ITI4", "ITF1", "ITF3", "ITG1", "ITG2")
+  # Regional weights vary about threefold. The source varies more (mean
+  # weight 166 in ITC2, 2359 in ITC4), but with 200 to 2500 here
+  # release_weights() stops in S1 for a low-weight region where a quarter of
+  # the records have the region suppressed: the national weight given to
+  # those records exceeds the region's total. That stop is tested in
+  # test-weights.R; these fixtures test the rest of the pipeline.
+  region_weight <- setNames(round(runif(length(nuts2), 800, 2500)), nuts2)
   hh <- data.table(hh_id = as.character(1000 + seq_len(n_hh)),
                    nuts2 = sample(nuts2, n_hh, replace = TRUE),
                    hh_size = sample(1:6, n_hh, replace = TRUE, prob = c(3, 3, 2, 2, 1, 0.5)),
-                   hh_weight = runif(n_hh, 200, 2500),
+                   hh_weight = NA_real_,
                    hh_disp_income = round(rlnorm(n_hh, 10, 0.6)))
+  hh[, hh_weight := region_weight[nuts2]]
   hh[, eq_size := 1 + 0.5 * pmax(hh_size - 1, 0)]
   p <- hh[rep(seq_len(.N), pmin(hh_size, 3))]
   p[, `:=`(

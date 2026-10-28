@@ -43,12 +43,16 @@ GROUPINGS <- list(
 SUPPRESSION_IMPORTANCE <- c(region = 1, sex = 1, age = 2, marital = 5,
                             citizenship = 6, isced = 4, isco1 = 7, hh_size = 3)
 
+# Importance for the later passes of local suppression: household size is
+# suppressed last of all keys, the other keys keep their order.
+HH_SIZE_LAST_IMPORTANCE <- replace(SUPPRESSION_IMPORTANCE + 1, "hh_size", 1)
+
 SCENARIOS <- list(
-  S1 = list(label = "S1: NUTS 2, 5-year age bands, detailed codes, k = 3",
+  S1 = list(id = "S1", label = "S1: NUTS 2, 5-year age bands, detailed codes, k = 3",
             region = "nuts2", age_width = 5, group = FALSE, k = 3),
-  S2 = list(label = "S2: NUTS 1, 10-year age bands, grouped codes, k = 3",
+  S2 = list(id = "S2", label = "S2: NUTS 1, 10-year age bands, grouped codes, k = 3",
             region = "nuts1", age_width = 10, group = TRUE, k = 3),
-  S3 = list(label = "S3: NUTS 1, 10-year age bands, grouped codes, k = 5",
+  S3 = list(id = "S3", label = "S3: NUTS 1, 10-year age bands, grouped codes, k = 5",
             region = "nuts1", age_width = 10, group = TRUE, k = 5)
 )
 
@@ -66,52 +70,131 @@ recode_keys <- function(obj, scenario) {
   obj
 }
 
-# Microaggregate household income once per household (MDAV, groups of 3).
+# Microaggregate equivalised income once per household (MDAV, groups of 3).
+# Households without income are dropped.
 protect_household_income <- function(households, aggr = 3) {
-  hh <- households[!is.na(hh_disp_income)]
-  m <- sdcMicro::microaggregation(as.data.frame(hh[, .(hh_disp_income)]),
-                                  variables = "hh_disp_income", aggr = aggr, method = "mdav")
-  data.table(hh_id = hh$hh_id, hh_disp_income = m$mx$hh_disp_income)
+  hh <- households[!is.na(eq_income)]
+  m <- sdcMicro::microaggregation(as.data.frame(hh[, .(eq_income)]),
+                                  variables = "eq_income", aggr = aggr, method = "mdav")
+  data.table(hh_id = hh$hh_id, eq_income = m$mx$eq_income)
+}
+
+# Household keys are released with a household id, so a value suppressed for
+# one member must be suppressed for all members. sdcMicro treats NA as matching
+# any value, so the extra NAs cannot lower k-anonymity.
+harmonise_household_keys <- function(obj, vars = c("region", "hh_size")) {
+  keys <- sdcMicro::get.sdcMicroObj(obj, "manipKeyVars")
+  hh <- sdcMicro::get.sdcMicroObj(obj, "origData")$hh_id
+  for (v in vars) {
+    any_na <- ave(is.na(keys[[v]]), hh, FUN = any)
+    keys[[v]][any_na] <- NA
+  }
+  obj <- sdcMicro::set.sdcMicroObj(obj, "manipKeyVars", list(keys))
+  sdcMicro::calcRisks(obj)
+}
+
+# Local suppression that never leaves household size blank. The number of
+# members a household has in the release gives its size exactly in the top
+# class and a lower bound otherwise, so a blank household size protects little.
+# After each pass, household sizes blanked by suppression are restored (values
+# missing in `recoded` stay missing) and local suppression runs again on the
+# result, with household size suppressed last, so that other keys are blanked
+# instead. sdcMicro still blanks household size when it is the only key that
+# tells a record apart from its nearest records; from the second pass on,
+# such a record also loses its least important key that is not yet blank
+# (FALLBACK_ORDER), so every pass removes detail and the loop ends. Stops if
+# household size is still blank after `max_passes` passes.
+FALLBACK_ORDER <- names(sort(SUPPRESSION_IMPORTANCE[names(SUPPRESSION_IMPORTANCE) != "hh_size"],
+                             decreasing = TRUE))
+
+blank_least_important <- function(keys, rows) {
+  for (i in rows) {
+    v <- FALLBACK_ORDER[!is.na(unlist(keys[i, FALLBACK_ORDER]))][1]
+    if (!is.na(v)) keys[[v]][i] <- NA
+  }
+  keys
+}
+
+suppress_keeping_hh_size <- function(obj, k, recoded, max_passes = 10) {
+  obj <- sdcMicro::localSuppression(obj, k = k, importance = unname(SUPPRESSION_IMPORTANCE[KEY_VARS]))
+  passes <- 1
+  repeat {
+    keys <- sdcMicro::get.sdcMicroObj(obj, "manipKeyVars")
+    blanked <- is.na(keys$hh_size) & !is.na(recoded$hh_size)
+    if (!any(blanked)) break
+    if (passes >= max_passes) {
+      stop(sprintf("Local suppression still blanks household size for %d records after %d passes.",
+                   sum(blanked), passes), call. = FALSE)
+    }
+    keys$hh_size[blanked] <- recoded$hh_size[blanked]
+    if (passes >= 2) keys <- blank_least_important(keys, which(blanked))
+    obj <- sdcMicro::set.sdcMicroObj(obj, "manipKeyVars", list(keys))
+    obj <- sdcMicro::calcRisks(obj)
+    obj <- sdcMicro::localSuppression(obj, k = k, importance = unname(HH_SIZE_LAST_IMPORTANCE[KEY_VARS]))
+    passes <- passes + 1
+  }
+  fk <- obj@risk$individual[, "fk"]
+  if (min(fk) < k) stop(sprintf("Local suppression left records with fk = %d < k = %d.", min(fk), k),
+                        call. = FALSE)
+  list(obj = obj, passes = passes)
 }
 
 # Run one scenario. Returns the risk after each step, the final sdcMicro
-# object and the release file.
+# object, the protected file (with survey ids) and the release file. The
+# random ids use a seed of their own in each scenario, so that releases of
+# different scenarios cannot be joined on them.
 run_scenario <- function(persons, scenario, hh_income_protected, seed = 2026) {
   df <- as_sdc_input(persons, scenario$region)
   obj <- new_sdc(df, num_vars = "emp_income", seed = seed)
   obj <- recode_keys(obj, scenario)
   after_recoding <- risk_summary(obj, scenario$label)[, step := "after global recoding"]
-  obj <- sdcMicro::localSuppression(obj, k = scenario$k,
-                                    importance = unname(SUPPRESSION_IMPORTANCE[KEY_VARS]))
+  recoded_keys <- sdcMicro::get.sdcMicroObj(obj, "manipKeyVars")
+  supp <- suppress_keeping_hh_size(obj, scenario$k, recoded_keys)
+  obj <- harmonise_household_keys(supp$obj, vars = "region")
   obj <- sdcMicro::microaggregation(obj, variables = "emp_income", aggr = 3, method = "mdav")
   final <- risk_summary(obj, scenario$label)[, step := "after local suppression"]
-  list(risk = rbind(after_recoding, final), obj = obj,
-       release = build_release(obj, hh_income_protected, seed))
+  suppressions <- suppression_summary(recoded_keys, sdcMicro::get.sdcMicroObj(obj, "manipKeyVars"),
+                                      scenario$label)
+  protected <- protected_file(obj, hh_income_protected, scenario$region)
+  list(risk = rbind(after_recoding, final), obj = obj, suppressions = suppressions,
+       suppression_passes = supp$passes, protected = protected,
+       release = build_release(protected, seed + match(scenario$id, names(SCENARIOS))))
 }
 
-build_release <- function(obj, hh_income_protected, seed = 2026) {
+RELEASE_COLUMNS <- c("person_release_id", "hh_release_id", "region", "nuts1", "sex", "age_band",
+                     "marital", "citizenship", "isced", "isco1", "hh_size", "activity",
+                     "emp_income", "eq_income", "weight")
+
+# The protected file: the release columns with the survey person and
+# household ids still attached, for checks and utility measures. The weight
+# is the released weight, constant within the released region.
+protected_file <- function(obj, hh_income_protected, region_level = c("nuts2", "nuts1")) {
+  region_level <- match.arg(region_level)
   rel <- data.table::as.data.table(sdcMicro::extractManipData(obj))
   # extractManipData() turns a recoded numeric key back into integer codes;
   # take the labelled keys straight from the object instead.
   keys <- sdcMicro::get.sdcMicroObj(obj, "manipKeyVars")
   for (v in KEY_VARS) set(rel, j = v, value = keys[[v]])
+  # Character vectors, so that an error names the region, not a factor code.
+  rel[, weight := release_weights(as.character(get(region_level)), as.character(region), weight)]
   rel[, hh_id := as.character(hh_id)]
-  rel[, hh_disp_income := NULL]
+  rel[, eq_income := NULL]
   rel <- merge(rel, hh_income_protected, by = "hh_id", all.x = TRUE)
-  rel[, eq_income := hh_disp_income / eq_size]
   rel[, nuts1 := substr(as.character(region), 1, 3)]
   rel[, age_band := age]
+  keep <- c("person_id", "hh_id", setdiff(RELEASE_COLUMNS, c("person_release_id", "hh_release_id")))
+  rel[, ..keep]
+}
 
-  # Replace survey identifiers with random numbers.
+# Replace survey identifiers with random numbers and keep the release columns.
+build_release <- function(protected, seed = 2026) {
+  rel <- data.table::copy(protected)
   set.seed(seed)
   hh_map <- data.table(hh_id = unique(rel$hh_id))
   hh_map[, hh_release_id := sample.int(.N)]
   rel <- merge(rel, hh_map, by = "hh_id")
   rel[, person_release_id := sample.int(.N)]
-  keep <- c("person_release_id", "hh_release_id", "region", "nuts1", "sex", "age_band",
-            "marital", "citizenship", "isced", "isco1", "hh_size", "activity",
-            "eq_size", "emp_income", "hh_disp_income", "eq_income", "weight")
-  rel <- rel[, ..keep]
+  rel <- rel[, ..RELEASE_COLUMNS]
   data.table::setorder(rel, hh_release_id, person_release_id)
   rel[]
 }

@@ -24,8 +24,9 @@ ind <- out("indicators.csv")
 ovl <- out("ci_overlap.csv")
 tab <- out("table_protected.csv")
 tab_sum <- out("table_summary.csv")
-audit <- out("table_audit.csv")
-audit0 <- out("table_audit_without_secondary.csv")
+checks <- out("release_checks.csv")
+audit <- out("table_audit_income.csv")
+audit0 <- out("table_audit_income_without_secondary.csv")
 
 fmt <- function(x, d = 0) formatC(x, format = "f", digits = d, big.mark = ",")
 pct <- function(x, d = 1) paste0(formatC(x, format = "f", digits = d), "%")
@@ -44,6 +45,21 @@ orig <- risk[step == "no protection"]
 final <- risk[step == "after local suppression"]
 n_keys <- 8
 scen_short <- function(x) sub(":.*", "", x)
+# One value per scenario, named by scenario id; "n/a" for a scenario that the
+# run did not include (the pipeline can run a subset of the scenarios).
+by_sc <- function(dt, col) setNames(dt[[col]], scen_short(dt$scenario))
+for_sc <- function(x, id, f = fmt, ...) {
+  if (id %in% names(x) && !is.na(x[[id]])) f(x[[id]], ...) else "n/a"
+}
+published <- if (is.null(info$published_scenario)) "S3" else info$published_scenario
+mx_tab <- ind[, .(scenario = scenario[1], w = max(abs(rel_diff_weight_pct)),
+                  i = max(abs(rel_diff_income_pct)), t = max(abs(rel_diff_pct))),
+              by = .(sc = scen_short(scenario))]
+mx_w <- by_sc(mx_tab, "w")
+mx_i <- by_sc(mx_tab, "i")
+mx_t <- by_sc(mx_tab, "t")
+er_final <- by_sc(final, "expected_reidentifications")
+label_final <- by_sc(final, "scenario")
 ```
 
 <div class="alert alert-warning" role="note">
@@ -72,16 +88,23 @@ households) as if it were the confidential source.
   expected re-identifications.
 - Three protection scenarios were compared. All of them remove every sample
   unique. They differ in how much detail they sacrifice to get there.
-- The recommended scenario, **`r final[scenario %like% "^S3", scenario]`**,
-  leaves no combination shared by fewer than 5 records, reduces expected
-  re-identifications to `r fmt(final[scenario %like% "^S3", expected_reidentifications], 2)`,
-  and changes the headline income and poverty indicators by less than
-  `r pct(ind[scenario %like% "^S3", max(abs(rel_diff_pct))], 2)`.
+- The recommended scenario, **`r for_sc(label_final, "S3", identity)`**,
+  leaves no combination shared by fewer than 5 records, also when the
+  released weight is added to the keys, and reduces expected
+  re-identifications to `r for_sc(er_final, "S3", fmt, 2)`.
+  It changes the income and poverty indicators by at most
+  `r for_sc(mx_t, "S3", pct, 2)`, almost all of
+  it because the released weight can no longer differ between the NUTS 2
+  regions of a NUTS 1 area. Only this scenario is released; the other two
+  are comparison runs, shown here only through their aggregate risk and loss
+  measures.
 - In the table of employee income by region, occupation and sex,
   `r tab_sum$primary` cells are sensitive and `r tab_sum$secondary` more
-  are hidden to stop them from being recomputed from the margins. Without
-  the secondary suppressions, `r sum(!audit0$protected)` of the
-  `r nrow(audit0)` sensitive cells could be recomputed exactly; with them, none can.
+  are hidden so that no sensitive cell can be estimated too closely from the
+  published cells. With the primary suppressions alone,
+  `r sum(audit0$protected)` of the `r nrow(audit0)` sensitive cells are
+  protected; with the secondary suppressions, `r sum(audit$protected)` of
+  `r nrow(audit)` are.
 
 ## Why disclosure control
 
@@ -120,8 +143,13 @@ for records that match them. The facts considered are the *key variables*
 | Household size | HX040 | 1 to 10 |
 
 Survey identifiers (PB030, PX030) are direct identifiers and are replaced by
-random numbers. Employee income (PY010G) and household disposable income
-(HY020) are confidential numerical variables. Weights (PB040) are kept.
+random numbers. Employee income (PY010G) and equivalised disposable income
+(HY020 / HX050) are confidential numerical variables; household disposable
+income and the equivalised household size are not released, because together
+with equivalised income they would reveal household size. The personal weight
+(PB040) is replaced by a released weight, described below, because the
+original weight takes one value per NUTS 2 region and would reveal the region
+in the scenarios that publish only NUTS 1.
 
 ## Risk in the original file
 
@@ -164,11 +192,23 @@ Each scenario applies three standard methods in this order (Hundepool et al.,
 2. **Local suppression**: individual key values are blanked, choosing the
    values that break the most risky combinations, until every combination is
    shared by at least *k* records. Region, sex and age are suppressed last
-   because they matter most to users.
+   because they matter most to users. Household size is never blanked: the
+   number of members a household has in the release would give it back.
+   Region describes the household, and the release keeps a household
+   identifier, so a region blanked for one member is blanked for every member
+   of the household.
 3. **Microaggregation** (MDAV, groups of 3) of the two income variables: each
    value is replaced by the mean of a group of three similar values, so no
-   exact income is released. Household income is treated once per household,
-   so all members of a household keep the same value.
+   exact income is released. Equivalised income is treated once per
+   household, so all members of a household keep the same value.
+
+The released weight is the original weight post-stratified to the released
+region: one value per released region (NUTS 2 in S1, NUTS 1 in S2 and S3)
+and one national value for records whose region is blanked, so that regional
+and national totals are unchanged. It carries no information below the
+released region. The price is that, in S2 and S3, it no longer corrects for
+the different sampling rates of the NUTS 2 regions inside a NUTS 1 area: any
+weight that does so must differ between NUTS 2 regions, and so reveals them.
 
 ```{r scenarios}
 knitr::kable(data.table(
@@ -201,6 +241,51 @@ Recoding alone does most of the work for S2 and S3. In S1, which keeps
 detailed codes, recoding leaves many combinations rare, so local suppression
 has to blank many more values to reach the same guarantee.
 
+### Release checks
+
+Before a release file is written, five checks run on it; the pipeline stops
+if one fails.
+
+- **Smallest group with the weight as a key** (`min_fk_with_weight`): the
+  smallest number of records sharing a combination of the eight keys *and*
+  the released weight. It must be at least *k*.
+- **Weights that point to one NUTS 2 region** (`weights_spanning_one_nuts2`):
+  released weight values whose records all come from a single NUTS 2 region.
+  It must be 0 in S2 and S3; it does not apply to S1, which publishes NUTS 2.
+- **Households with inconsistent keys** (`households_inconsistent_keys`):
+  households where region or household size is blank for some members and
+  not for others. It must be 0.
+- **Blank household size** (`hh_size_blanked`): records whose household size
+  is blank in the release. It must be 0.
+- **Forbidden columns** (`forbidden_columns`): equivalised household size,
+  household disposable income, survey identifiers or exact age in the
+  release. It must be 0.
+
+```{r release-checks}
+ck <- copy(checks)[, `:=`(Scenario = scen_short(scenario),
+                          value = ifelse(is.na(value), "n/a", fmt(value)),
+                          pass = fcase(is.na(pass), "n/a", pass, "yes", default = "no"))]
+ck <- dcast(ck, check ~ Scenario, value.var = c("value", "pass"))
+ck <- ck[match(unique(checks$check), check)]
+sc_ids <- intersect(c("S1", "S2", "S3"), unique(scen_short(checks$scenario)))
+ck <- ck[, c("check", as.vector(rbind(paste0("value_", sc_ids), paste0("pass_", sc_ids)))), with = FALSE]
+setnames(ck, c("Check", as.vector(rbind(paste(sc_ids, "value"), paste(sc_ids, "pass")))))
+knitr::kable(ck, align = paste0("l", strrep("r", ncol(ck) - 1)))
+fk_w <- checks[check == "min_fk_with_weight", setNames(value, scen_short(scenario))]
+```
+
+With the released weight added to the keys, the smallest group has
+`r for_sc(fk_w, "S1")` records in S1, `r for_sc(fk_w, "S2")` in S2 and
+`r for_sc(fk_w, "S3")` in S3. Because the released weight is one value per
+released region plus one national value for blanked regions, this check
+gives the same result as k-anonymity on the eight keys alone: it shows that
+the weight adds no detail to the keys, not a second, independent guarantee.
+Records with a blanked
+region all share one national weight, which says only what the blank already
+says, so in the group check their weight matches any value, like their
+region, and in the NUTS 2 check that value is not counted (were their
+weights different, they would be checked as they are).
+
 ## Information loss
 
 ### Suppressed values
@@ -229,24 +314,53 @@ knitr::kable(st, align = "lrr")
 ### Indicators
 
 Each indicator is computed on the original and on the protected file with
-the same code. The poverty threshold is 60% of the national median
-equivalised disposable income, as in the Eurostat indicator `ilc_li02`.
-Because the file is synthetic, the levels are not real Italian statistics;
-only the differences matter. The differences come almost entirely from the
-microaggregation of incomes, which is the same in all scenarios: suppressing
-key values hardly moves these indicators. The scenarios differ instead in
-the detail they publish and in the number of blanked values.
+the same code. The at-risk-of-poverty (AROP) rate is computed as in the
+Eurostat indicator `ilc_li02` (threshold at 60% of the national median
+equivalised disposable income), but on persons aged 16 and over with a
+personal weight, because only the personal file is released. Because the
+file is synthetic, the levels are not real Italian statistics; only the
+differences matter.
 
-```{r indicators}
-iw <- dcast(ind[, .(indicator, domain, scenario = scen_short(scenario), rel_diff_pct)],
-            indicator + domain ~ scenario, value.var = "rel_diff_pct")
-base <- unique(ind[, .(indicator, domain, value_original)])
-iw <- merge(base, iw, by = c("indicator", "domain"))
-iw[, value_original := ifelse(indicator %like% "AROP|Gini", fmt(value_original, 3), fmt(value_original))]
-for (s in intersect(c("S1", "S2", "S3"), names(iw))) set(iw, j = s, value = pct(iw[[s]], 2))
-setnames(iw, c("indicator", "domain", "value_original"), c("Indicator", "Domain", "Original value"))
-knitr::kable(iw, align = "llrrrr",
-             caption = "Relative difference, protected vs original")
+The tables separate two sources of change. *Weight only* computes the
+indicator on the original file with each record's weight replaced by its
+released weight; *incomes only* replaces employee and equivalised income by
+their microaggregated values; *released file* is the protected file as
+published. The two partial effects do not add up exactly to the total,
+because they interact and because records with a blanked region drop out of
+the regional figures.
+
+```{r indicator-sources}
+top <- ind[scen_short(scenario) == "S3"][which.max(abs(rel_diff_weight_pct))]
+nuts1_names <- c(ITC = "Nord-Ovest", ITF = "Sud", ITG = "Isole", ITH = "Nord-Est", ITI = "Centro")
+top_text <- if (nrow(top) == 0) "n/a" else {
+  d <- if (top$domain %in% names(nuts1_names)) paste0(top$domain, ", ", nuts1_names[[top$domain]]) else top$domain
+  paste0(top$indicator, ", ", d)
+}
+```
+
+Microaggregation is the same in every scenario and moves no indicator by
+more than `r for_sc(mx_i, "S3", pct, 2)`. In S1 the weight changes only through the
+records with a blanked region, which get the national weight while the rest
+of their region absorbs the difference; its effect is at most
+`r for_sc(mx_w, "S1", pct, 2)`. In S2
+and S3 the weight is the larger source: it is constant within each NUTS 1
+area, so it no longer corrects for the different sampling rates of the NUTS 2
+regions inside an area, and it moves indicators by up to
+`r for_sc(mx_w, "S3", pct, 2)` (`r top_text`). That is the price
+of not revealing NUTS 2 through the weight.
+
+```{r indicators, results = "asis"}
+for (sc in sort(unique(ind$scenario))) {
+  iw <- ind[scenario == sc, .(Indicator = indicator, Domain = domain,
+    `Original value` = ifelse(indicator %like% "AROP|Gini", fmt(value_original, 3), fmt(value_original)),
+    `Weight only` = pct(rel_diff_weight_pct, 2),
+    `Incomes only` = pct(rel_diff_income_pct, 2),
+    `Released file` = pct(rel_diff_pct, 2))]
+  cat(knitr::kable(iw, align = "llrrrr",
+                   caption = paste0(sc, ". Relative difference from the original value")),
+      sep = "\n")
+  cat("\n\n")
+}
 ```
 
 ### Regression
@@ -254,7 +368,13 @@ knitr::kable(iw, align = "llrrrr",
 A user fitting a wage equation (log employee income on sex, age band and
 NUTS 1 area, weighted) should reach the same conclusions on the protected
 file. The confidence-interval overlap (Karr et al., 2006) is 1 when the 95%
-intervals coincide and 0 when they do not overlap at all.
+intervals coincide and 0 when they do not overlap at all. The model is fitted
+with `lm(weights = weight)`, which treats sampling weights as precision
+weights, so its intervals are not design-based; they serve here only to
+compare the two files. In S2 and S3 the overlap is lower for the same reason
+as the indicators: the released weight changes the relative weight of the
+NUTS 2 regions inside each NUTS 1 area, which shifts the regional and age
+coefficients.
 
 ```{r overlap}
 ov <- ovl[term != "(Intercept)", .(`Mean overlap` = round(mean(overlap), 2),
@@ -287,14 +407,17 @@ Points lower down are safer; points further left lose less detail. Global
 recoding is not captured on the horizontal axis: S2 and S3 publish coarser
 categories than S1 for every record.
 
-**Recommendation.** S3 is the release candidate. It reaches 5-anonymity with
-far fewer suppressions than S1 because recoding removed the rare categories
-first, and its indicators are practically unchanged. Moving from S2 to S3
-(k = 3 to k = 5) roughly doubles the suppressions but removes the remaining
-records that share their combination with only 3 or 4 others. S1 keeps regional
-detail but must blank many more values, mostly occupation, and offers only
-3-anonymity. Users who need NUTS 2 detail should use the scientific-use file
-under a research contract rather than a more detailed public file.
+**Recommendation.** S3 is the release candidate. It reaches 5-anonymity,
+with the weight included, with far fewer suppressions than S1 because
+recoding removed the rare categories first. Its cost is in the weight: S2
+and S3 publish NUTS 1, so the weight cannot reflect NUTS 2, and indicators
+move by up to `r for_sc(mx_t, "S3", pct, 2)` instead of `r for_sc(mx_t, "S1", pct, 2)` in S1.
+Moving from S2 to S3 (k = 3 to k = 5) leaves the indicators as in S2,
+roughly doubles the suppressions and removes the remaining records that share
+their combination with only 3 or 4 others. S1 keeps regional detail but must
+blank many more values, mostly occupation, and offers only 3-anonymity.
+Users who need NUTS 2 detail should use the scientific-use file under a
+research contract rather than a more detailed public file.
 
 ## Table protection
 
@@ -307,24 +430,47 @@ group) and sex: `r fmt(tab_sum$cells)` cells including all margins.
   estimate the largest within 10% by subtracting its own value from the total
   (p% rule, p = 10).
 - **Secondary suppression.** A suppressed cell could be recomputed from
-  its row or column totals, so additional cells are hidden. sdcTable's
-  `SIMPLEHEURISTIC` chooses them across the region hierarchy.
-- **Audit.** For every sensitive cell, a linear program computes the tightest
-  interval an intruder can derive from the published cells. The cell is
-  protected only if that interval is not a single value.
+  its row or column totals, so additional cells are hidden across the region
+  hierarchy and both other dimensions. sdcTable's quick heuristic
+  (`SIMPLEHEURISTIC`) is tried first, then its optimisation method (`OPT`);
+  the first pattern that passes the audit below is published.
+- **Audit.** For every sensitive cell, a linear program, independent of
+  sdcTable, computes the lowest and highest income the cell can have given
+  the published cells and the sums of the table. That interval must keep the
+  true value at a distance of at least its p% protection level on both sides:
+  the smallest error the second-largest contributor must be left with, so
+  that it cannot estimate the largest contribution to within 10%.
+- **Additions driven by the audit.** sdcTable's protection levels act on the
+  number of contributors, not on income, so its pattern can leave an interval
+  too narrow. When that happens, further cells are hidden around the failing
+  cell, as rectangles or cubes of neighbouring cells (a sibling region, another
+  occupation, the other sex), choosing the group that hides the least income
+  and still protects the cell, and the audit is run again until every
+  sensitive cell is protected.
 
 ```{r table-summary}
 knitr::kable(data.table(
   Item = c("Cells", "Published", "Primary suppressions", "Secondary suppressions",
+           "of which added by the audit",
            "Income in suppressed detailed cells",
-           "Sensitive cells recomputable without secondary suppression",
-           "Sensitive cells recomputable with secondary suppression"),
+           "Sensitive cells protected, primary suppressions only",
+           "Sensitive cells protected, with secondary suppressions"),
   Value = c(fmt(tab_sum$cells), fmt(tab_sum$published), fmt(tab_sum$primary),
-            fmt(tab_sum$secondary), pct(tab_sum$income_hidden_pct, 1),
-            paste(sum(!audit0$protected), "of", nrow(audit0)),
-            paste(sum(!audit$protected), "of", nrow(audit)))
+            fmt(tab_sum$secondary), fmt(tab_sum$cells_added),
+            pct(tab_sum$income_hidden_pct, 1),
+            paste(sum(audit0$protected), "of", nrow(audit0)),
+            paste(sum(audit$protected), "of", nrow(audit)))
 ), align = "lr")
 ```
+
+Secondary suppression method used: `r info$table_method`, with
+`r info$table_cells_added` cells added by the audit. With the primary
+suppressions alone, `r sum(audit0$protected)` of `r nrow(audit0)` sensitive
+cells are protected; with the secondary suppressions,
+`r sum(audit$protected)` of `r nrow(audit)` are. The published table and the
+audit files give only which cells are suppressed and whether each sensitive
+cell is protected; the values, contributions and intervals of the suppressed
+cells are not published.
 
 ```{r table-pattern, fig.height = 6.2}
 p <- tab[nchar(region) == 4 & occupation != "Total" & sex != "Total"]
@@ -347,13 +493,23 @@ ggplot(p, aes(x = occupation, y = region, fill = status)) +
   theme_report + theme(panel.grid.major = element_blank())
 ```
 
+```{r pattern-groups}
+isco_names <- c(`0-1` = "managers", `2` = "professionals", `3` = "technicians",
+                `4` = "clerical support workers", `5` = "service and sales workers",
+                `6` = "skilled agricultural workers", `7` = "craft workers",
+                `8` = "plant and machine operators", `9` = "elementary occupations")
+groups_of <- function(who) {
+  g <- p[status == "Primary suppression" & sex == who, .N, by = occupation][order(-N, occupation)]
+  paste0(g$N, " for ", isco_names[g$occupation], " (group ", g$occupation, ")", collapse = ", ")
+}
+```
+
 `r sum(p$status == "Primary suppression" & p$sex == "Women")` of the
 `r sum(p$status == "Primary suppression")` sensitive detailed cells are for
-women: occupations with few female employees (skilled agricultural workers,
-group 6; plant and machine operators, group 8; managers, groups 0-1) in small
-or southern regions. Secondary suppressions fall on the matching cells for
-men and on neighbouring regions, so that no row or column total can be used
-to recover them.
+women, in occupations with few female employees: `r groups_of("Women")`.
+For men there are `r groups_of("Men")`. The secondary suppressions,
+including the cells added by the audit, keep the interval of every
+sensitive cell at least as wide as its p% protection level on both sides.
 
 ## Limitations
 
@@ -364,8 +520,17 @@ to recover them.
 - Microaggregation by itself does not guarantee that a very high income
   cannot be linked to an outlier; a production release would add top-coding
   of income checked against the actual distribution.
-- `SIMPLEHEURISTIC` does not minimise the information hidden. An
-  optimisation method (`OPT`, or τ-ARGUS) would usually hide less.
+- The released weight is constant within each released region. Real
+  EU-SILC weights vary within regions by design; a production release would
+  calibrate the weights to several published margins (for example sex and
+  age band within NUTS 1) and run the same release checks on the result.
+- The released weights keep each region's total, and records with a blanked
+  region carry the national weight. Anyone who knows the official NUTS 1
+  population totals can therefore work out how many records with a blanked
+  region belong to each NUTS 1 area, though not which ones.
+- The cells added after the audit are chosen one failing cell at a time; the
+  final pattern is protected but not minimal. τ-ARGUS's modular method with
+  income-based protection levels would usually hide less.
 
 ## Reproducibility
 

@@ -8,3 +8,5 @@ site/
 reports/*.html
 reports/*_files/
 .superpowers/
+renv/library/
+renv/staging/

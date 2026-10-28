@@ -31,11 +31,14 @@ flat_hierarchy <- function(codes) {
   sdcHierarchies::hier_create(root = "Total", nodes = sort(unique(codes)))
 }
 
+# Primary suppression (threshold rule, maxN = 2, and p% rule on the weighted
+# incomes) and secondary suppression with sdcTable. Returns the final table
+# and the microdata it was built from.
 protect_income_table <- function(persons, max_n = 2, p = 10,
                                  method = "SIMPLEHEURISTIC") {
-  micro <- as.data.frame(table_microdata(persons))
+  micro <- table_microdata(persons)
   prob <- sdcTable::makeProblem(
-    data = micro,
+    data = as.data.frame(micro),
     dimList = list(region = region_hierarchy(micro$region),
                    occupation = flat_hierarchy(micro$occupation),
                    sex = flat_hierarchy(micro$sex)),
@@ -46,28 +49,35 @@ protect_income_table <- function(persons, max_n = 2, p = 10,
   prob <- sdcTable::primarySuppression(prob, type = "p", p = p, numVarName = "income")
   res <- sdcTable::protectTable(prob, method = method)
   final <- data.table::as.data.table(sdcTable::getInfo(res, type = "finalData"))
-  list(final = final,
-       audit = audit_suppression(prob, final),
-       audit_without_secondary = data.table::as.data.table(sdcTable::attack(prob, verbose = FALSE)))
+  list(final = final, micro = micro)
 }
 
-# Independent check of the suppression pattern: apply it to the problem and
-# solve the intruder's linear programs for every primary-suppressed cell. A
-# cell is protected when its value cannot be pinned down from the published
-# cells (upper bound > lower bound). sdcTable attacks the contributor counts;
-# whether a cell can be recomputed exactly depends only on which cells are
-# suppressed, so the check covers the income values as well.
-audit_suppression <- function(prob, final) {
-  # A NUTS 1 area with a single NUTS 2 region is one cell for sdcTable; the
-  # NUTS 2 row is a duplicate and cannot be addressed separately.
-  nuts2 <- unique(final[nchar(region) == 4, region])
-  single <- names(which(table(substr(nuts2, 1, 3)) == 1))
-  duplicate <- nchar(final$region) == 4 & substr(final$region, 1, 3) %in% single
-  secondary <- as.data.frame(final[sdcStatus == "x" & !duplicate, .(region, occupation, sex)])
-  if (nrow(secondary) > 0) {
-    prob <- sdcTable::change_cellstatus(prob, specs = secondary, rule = "x", verbose = FALSE)
+# Protected table whose pattern passes the income audit. The quick heuristic
+# is tried first, then the optimal method; if the optimal pattern still leaves
+# primary cells unprotected, suppressions are added to it until the audit
+# passes (augment_suppression(), which stops the run if it cannot).
+# `audit_without_secondary` audits the primary suppressions alone, to show that
+# the secondary ones are needed; `added` lists the cells added to the OPT
+# pattern.
+protect_income_table_audited <- function(persons, p = 10) {
+  for (method in c("SIMPLEHEURISTIC", "OPT")) {
+    tab <- protect_income_table(persons, p = p, method = method)
+    audit <- audit_protection_intervals(tab$final, tab$micro, p = p)
+    added <- tab$final[0, .(region, occupation, sex, income)]
+    if (all(audit$protected)) break
   }
-  data.table::as.data.table(sdcTable::attack(prob, verbose = FALSE))
+  if (!all(audit$protected)) {
+    aug <- augment_suppression(tab$final, tab$micro, p = p)
+    tab$final <- aug$final
+    added <- aug$added
+    method <- "OPT + audit-driven additions"
+    audit <- audit_protection_intervals(tab$final, tab$micro, p = p)
+  }
+  primary_only <- ifelse(tab$final$sdcStatus == "x", "s", tab$final$sdcStatus)
+  list(final = tab$final, micro = tab$micro, audit = audit,
+       audit_without_secondary = audit_protection_intervals(
+         tab$final, tab$micro, p = p, status = primary_only),
+       method = method, added = added)
 }
 
 # Cell counts by status: published (s), primary (u) and secondary (x)
