@@ -30,3 +30,28 @@ test_that("protection_level follows the p% rule", {
   expect_equal(protection_level(100, 80, 15), 3)
   expect_equal(protection_level(100, 50, 30), 0)
 })
+
+persons <- make_persons(400, seed = 7)
+
+test_that("the additivity constraints hold on the true cell values", {
+  tab <- protect_income_table(persons)
+  A <- table_constraints(tab$final[, .(region, occupation, sex)])
+  expect_lt(max(abs(A %*% tab$final$income)), 1e-6 * max(tab$final$income))
+})
+
+test_that("a NUTS 1 with a single NUTS 2 is a parent equal to its child", {
+  one <- persons[nuts2 != "ITH3"]                      # ITH keeps only ITH5
+  tab <- protect_income_table(one)
+  A <- table_constraints(tab$final[, .(region, occupation, sex)])
+  expect_lt(max(abs(A %*% tab$final$income)), 1e-6 * max(tab$final$income))
+})
+
+test_that("cell_contributions matches the table", {
+  tab <- protect_income_table(persons)
+  cc <- cell_contributions(tab$micro)
+  m <- merge(tab$final, cc, by = c("region", "occupation", "sex"))
+  expect_equal(nrow(m), nrow(tab$final))
+  expect_equal(m$X, m$income)
+  expect_equal(m$n, m$Freq)
+  expect_true(all(m$x1 >= m$x2))
+})
