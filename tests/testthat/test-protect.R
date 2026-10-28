@@ -1,14 +1,14 @@
 persons <- make_persons(300)
 hh_income <- protect_household_income(build_household_file(persons))
 
-test_that("household income microaggregation preserves the mean and the ranking", {
+test_that("equivalised income microaggregation preserves the mean and the ranking", {
   hh <- build_household_file(persons)
   merged <- merge(hh, hh_income, by = "hh_id", suffixes = c("", "_prot"))
   expect_equal(nrow(merged), nrow(hh))
-  expect_equal(mean(merged$hh_disp_income_prot), mean(merged$hh_disp_income))
-  expect_gt(cor(merged$hh_disp_income, merged$hh_disp_income_prot), 0.95)
+  expect_equal(mean(merged$eq_income_prot), mean(merged$eq_income))
+  expect_gt(cor(merged$eq_income, merged$eq_income_prot, method = "spearman"), 0.95)
   # Every released value is shared by at least 3 households.
-  expect_gte(min(table(merged$hh_disp_income_prot)), 3)
+  expect_gte(min(table(merged$eq_income_prot)), 3)
 })
 
 test_that("scenario S3 reaches 5-anonymity on the key variables", {
@@ -26,7 +26,8 @@ test_that("release file has no survey identifiers and coherent households", {
   expect_equal(nrow(rel), nrow(persons))
   expect_true(all(stats::na.omit(as.character(rel$age_band)) %in% AGE_BREAKS$`10`$labels))
   # One household income per household.
-  expect_equal(rel[, data.table::uniqueN(hh_disp_income), by = hh_release_id][, max(V1)], 1)
+  expect_false(any(c("eq_size", "hh_disp_income") %in% names(rel)))
+  expect_equal(rel[, data.table::uniqueN(eq_income), by = hh_release_id][, max(V1)], 1)
   expect_setequal(stats::na.omit(unique(as.character(rel$isced))),
                   c("Low (0-2)", "Medium (3-4)", "High (5-6)"))
 })

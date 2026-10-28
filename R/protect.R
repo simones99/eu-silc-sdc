@@ -66,12 +66,13 @@ recode_keys <- function(obj, scenario) {
   obj
 }
 
-# Microaggregate household income once per household (MDAV, groups of 3).
+# Microaggregate equivalised income once per household (MDAV, groups of 3).
+# Households without income are dropped.
 protect_household_income <- function(households, aggr = 3) {
-  hh <- households[!is.na(hh_disp_income)]
-  m <- sdcMicro::microaggregation(as.data.frame(hh[, .(hh_disp_income)]),
-                                  variables = "hh_disp_income", aggr = aggr, method = "mdav")
-  data.table(hh_id = hh$hh_id, hh_disp_income = m$mx$hh_disp_income)
+  hh <- households[!is.na(eq_income)]
+  m <- sdcMicro::microaggregation(as.data.frame(hh[, .(eq_income)]),
+                                  variables = "eq_income", aggr = aggr, method = "mdav")
+  data.table(hh_id = hh$hh_id, eq_income = m$mx$eq_income)
 }
 
 # Run one scenario. Returns the risk after each step, the final sdcMicro
@@ -96,9 +97,8 @@ build_release <- function(obj, hh_income_protected, seed = 2026) {
   keys <- sdcMicro::get.sdcMicroObj(obj, "manipKeyVars")
   for (v in KEY_VARS) set(rel, j = v, value = keys[[v]])
   rel[, hh_id := as.character(hh_id)]
-  rel[, hh_disp_income := NULL]
+  rel[, c("eq_size", "hh_disp_income", "eq_income") := NULL]
   rel <- merge(rel, hh_income_protected, by = "hh_id", all.x = TRUE)
-  rel[, eq_income := hh_disp_income / eq_size]
   rel[, nuts1 := substr(as.character(region), 1, 3)]
   rel[, age_band := age]
 
@@ -110,7 +110,7 @@ build_release <- function(obj, hh_income_protected, seed = 2026) {
   rel[, person_release_id := sample.int(.N)]
   keep <- c("person_release_id", "hh_release_id", "region", "nuts1", "sex", "age_band",
             "marital", "citizenship", "isced", "isco1", "hh_size", "activity",
-            "eq_size", "emp_income", "hh_disp_income", "eq_income", "weight")
+            "emp_income", "eq_income", "weight")
   rel <- rel[, ..keep]
   data.table::setorder(rel, hh_release_id, person_release_id)
   rel[]

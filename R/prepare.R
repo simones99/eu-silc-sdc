@@ -42,5 +42,5 @@ build_person_file <- function(d, h, p) {
 # Household-level file used to protect household income once per household,
 # so that members of the same household keep the same value.
 build_household_file <- function(persons) {
-  unique(persons[, .(hh_id, hh_weight, hh_disp_income)], by = "hh_id")
+  unique(persons[, .(hh_id, hh_weight, eq_income)], by = "hh_id")
 }

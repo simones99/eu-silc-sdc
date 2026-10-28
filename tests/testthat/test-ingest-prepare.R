@@ -28,4 +28,5 @@ test_that("build_household_file keeps one row per household", {
   hh <- build_household_file(persons)
   expect_equal(nrow(hh), 50)
   expect_false(anyDuplicated(hh$hh_id) > 0)
+  expect_named(hh, c("hh_id", "hh_weight", "eq_income"))
 })
