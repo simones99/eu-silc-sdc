@@ -63,7 +63,7 @@ write_out(data.table::rbindlist(risk, use.names = TRUE), "risk.csv")
 write_out(data.table::rbindlist(checks, use.names = TRUE)[, .(scenario, check, value, pass)],
           "release_checks.csv")
 write_out(data.table::rbindlist(suppressions, use.names = TRUE), "suppressions.csv")
-write_out(data.table::rbindlist(indicators), "indicators.csv")
+write_out(data.table::rbindlist(indicators, use.names = TRUE), "indicators.csv")
 write_out(data.table::rbindlist(overlap), "ci_overlap.csv")
 
 message("Protecting the income table")
@@ -80,13 +80,9 @@ pub[hide, income := NA_real_]
 if ("Freq" %in% names(pub)) pub[hide, Freq := NA]
 write_out(pub, "table_protected.csv")
 
-# Public audit: only the protected flag and a margin ratio. margin_ratio is
-# NA when the protection level PL is 0 (no margin is required there).
-public_audit <- function(a) {
-  a <- data.table::copy(a)
-  a[, margin_ratio := data.table::fifelse(PL > 0, pmin(U - X, X - L) / PL, NA_real_)]
-  a[, .(region, occupation, sex, protected, margin_ratio)]
-}
+# Public audit: only the protected flag. Margins (L, U, PL, ratios) would let
+# an intruder solve for a cell's value, so they stay in output/internal/.
+public_audit <- function(a) a[, .(region, occupation, sex, protected)]
 write_out(public_audit(tab$audit), "table_audit_income.csv")
 write_out(public_audit(tab$audit_without_secondary), "table_audit_income_without_secondary.csv")
 
