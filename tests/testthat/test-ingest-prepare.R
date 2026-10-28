@@ -6,6 +6,25 @@ test_that("download_puf stops when the file does not match the manifest hash", {
   expect_error(download_puf(manifest, dest_dir = dir), "SHA-256 mismatch")
 })
 
+test_that("download_puf allows 600 seconds for the download and restores the timeout", {
+  # The source file is 45 MB; R's default of 60 seconds cut a CI download short.
+  dir <- withr::local_tempdir()
+  ref <- file.path(withr::local_tempdir(), "ref.zip")
+  writeLines("puf", ref)
+  manifest <- list(file = "IT_PUF_EUSILC.zip", url = "https://example.invalid/x.zip",
+                   sha256 = sha256_file(ref))
+  timeout_seen <- NULL
+  local_mocked_bindings(download.file = function(url, destfile, ...) {
+    timeout_seen <<- getOption("timeout")
+    file.copy(ref, destfile)
+    0L
+  }, .package = "utils")
+  withr::local_options(timeout = 60)
+  expect_equal(download_puf(manifest, dest_dir = dir), file.path(dir, "IT_PUF_EUSILC.zip"))
+  expect_gte(timeout_seen, 600)
+  expect_equal(getOption("timeout"), 60)
+})
+
 test_that("build_person_file attaches household variables to each person", {
   d <- data.table(DB030 = c("1", "2"), DB040 = c("ITC4", "ITF3"), DB090 = c("100", "200"))
   h <- data.table(HB030 = c("1", "2"), HX040 = c("2", "1"), HX050 = c("1.5", "1"),

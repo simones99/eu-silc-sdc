@@ -17,6 +17,9 @@ download_puf <- function(manifest = read_manifest(), dest_dir = "data/raw") {
   zip_path <- file.path(dest_dir, manifest$file)
   if (!file.exists(zip_path)) {
     message("Downloading ", manifest$url)
+    # The file is 45 MB: R's default timeout of 60 seconds is too short.
+    old <- options(timeout = max(600, getOption("timeout")))
+    on.exit(options(old), add = TRUE)
     utils::download.file(manifest$url, zip_path, mode = "wb", quiet = TRUE)
   }
   actual <- sha256_file(zip_path)
