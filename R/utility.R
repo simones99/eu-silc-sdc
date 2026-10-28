@@ -65,10 +65,25 @@ indicator_set <- function(dt) {
   rbind(national, by_area, by_sex, use.names = TRUE)
 }
 
-compare_indicators <- function(original, protected) {
-  out <- merge(original, protected, by = c("indicator", "domain"),
-               suffixes = c("_original", "_protected"))
-  out[, rel_diff_pct := 100 * (value_protected - value_original) / abs(value_original)]
+# Information loss split by source: the weight change alone, the income
+# change alone, and the full release. Protected values are joined by person_id.
+loss_by_source <- function(persons, protected, release, label) {
+  idx <- match(persons$person_id, protected$person_id)
+  if (anyNA(idx)) stop("protected file is missing persons present in the original")
+  w_only <- data.table::copy(persons)[, weight := protected$weight[idx]]
+  i_only <- data.table::copy(persons)[, `:=`(emp_income = protected$emp_income[idx],
+                                             eq_income = protected$eq_income[idx])]
+  out <- Reduce(function(x, y) merge(x, y, by = c("indicator", "domain")), list(
+    setnames(indicator_set(persons), "value", "value_original"),
+    setnames(indicator_set(w_only), "value", "value_weight_only"),
+    setnames(indicator_set(i_only), "value", "value_income_only"),
+    setnames(indicator_set(release), "value", "value_protected")
+  ))
+  rel <- function(v) 100 * (v - out$value_original) / abs(out$value_original)
+  out[, `:=`(rel_diff_weight_pct = rel(value_weight_only),
+             rel_diff_income_pct = rel(value_income_only),
+             rel_diff_pct = rel(value_protected),
+             scenario = label)]
   out[order(indicator, domain)]
 }
 
