@@ -53,27 +53,31 @@ protect_income_table <- function(persons, max_n = 2, p = 10,
 }
 
 # Protected table whose pattern passes the income audit. The quick heuristic
-# is tried first, then the optimal method; if neither pattern protects every
-# primary cell the run stops. `audit_without_secondary` audits the primary
-# suppressions alone, to show that the secondary ones are needed.
+# is tried first, then the optimal method; if the optimal pattern still leaves
+# primary cells unprotected, suppressions are added to it until the audit
+# passes (augment_suppression(), which stops the run if it cannot).
+# `audit_without_secondary` audits the primary suppressions alone, to show that
+# the secondary ones are needed; `added` lists the cells added to the OPT
+# pattern.
 protect_income_table_audited <- function(persons, p = 10) {
   for (method in c("SIMPLEHEURISTIC", "OPT")) {
     tab <- protect_income_table(persons, p = p, method = method)
     audit <- audit_protection_intervals(tab$final, tab$micro, p = p)
-    if (all(audit$protected)) {
-      primary_only <- ifelse(tab$final$sdcStatus == "x", "s", tab$final$sdcStatus)
-      return(list(final = tab$final, micro = tab$micro, audit = audit,
-                  audit_without_secondary = audit_protection_intervals(
-                    tab$final, tab$micro, p = p, status = primary_only),
-                  method = method))
-    }
+    added <- tab$final[0, .(region, occupation, sex, income)]
+    if (all(audit$protected)) break
   }
-  failing <- audit[!(protected)]
-  stop(sprintf(paste("income table: %d of %d primary cells not protected with",
-                     "SIMPLEHEURISTIC or OPT (%s); decide with the user how to proceed"),
-               nrow(failing), nrow(audit),
-               paste(failing$region, failing$occupation, failing$sex, sep = "/", collapse = ", ")),
-       call. = FALSE)
+  if (!all(audit$protected)) {
+    aug <- augment_suppression(tab$final, tab$micro, p = p)
+    tab$final <- aug$final
+    added <- aug$added
+    method <- "OPT + audit-driven additions"
+    audit <- audit_protection_intervals(tab$final, tab$micro, p = p)
+  }
+  primary_only <- ifelse(tab$final$sdcStatus == "x", "s", tab$final$sdcStatus)
+  list(final = tab$final, micro = tab$micro, audit = audit,
+       audit_without_secondary = audit_protection_intervals(
+         tab$final, tab$micro, p = p, status = primary_only),
+       method = method, added = added)
 }
 
 # Cell counts by status: published (s), primary (u) and secondary (x)

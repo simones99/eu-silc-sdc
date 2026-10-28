@@ -39,11 +39,33 @@ test_that("the additivity constraints hold on the true cell values", {
   expect_lt(max(abs(A %*% tab$final$income)), 1e-6 * max(tab$final$income))
 })
 
+test_that("there is one constraint per parent cell and dimension", {
+  tab <- protect_income_table(persons)
+  regions <- unique(tab$final$region)
+  n_regions <- length(regions)
+  n_nuts1 <- sum(nchar(regions) == 3)
+  A <- table_constraints(tab$final[, .(region, occupation, sex)])
+  expect_equal(nrow(A), (1 + n_nuts1) * 30 + n_regions * 3 + n_regions * 10)
+})
+
 test_that("a NUTS 1 with a single NUTS 2 is a parent equal to its child", {
   one <- persons[nuts2 != "ITH3"]                      # ITH keeps only ITH5
   tab <- protect_income_table(one)
-  A <- table_constraints(tab$final[, .(region, occupation, sex)])
+  cells <- tab$final[, .(region, occupation, sex)]
+  A <- table_constraints(cells)
   expect_lt(max(abs(A %*% tab$final$income)), 1e-6 * max(tab$final$income))
+  # Rows where an ITH cell is the parent of the region breakdown.
+  ith_rows <- Filter(function(r) {
+    cells$region[A[r, ] == 1] == "ITH" && all(cells$region[A[r, ] == -1] != "ITH")
+  }, seq_len(nrow(A)))
+  expect_length(ith_rows, 30)
+  for (r in ith_rows) {
+    parent <- which(A[r, ] == 1)
+    child <- which(A[r, ] == -1)
+    expect_length(child, 1)
+    expect_equal(cells$region[child], "ITH5")
+    expect_equal(cells[child, .(occupation, sex)], cells[parent, .(occupation, sex)])
+  }
 })
 
 test_that("cell_contributions matches the table", {
@@ -54,4 +76,47 @@ test_that("cell_contributions matches the table", {
   expect_equal(m$X, m$income)
   expect_equal(m$n, m$Freq)
   expect_true(all(m$x1 >= m$x2))
+})
+
+test_that("dimension_moves keeps every sum of the dimension", {
+  children <- list(IT = c("ITC", "ITH"), ITC = c("ITC1", "ITC4"), ITH = "ITH5")
+  expect_equal(dimension_moves("ITC1", children), list(c("ITC1", "ITC4")))
+  expect_equal(dimension_moves("ITC", children),
+               list(c("ITC", "ITC1", "ITH", "ITH5"), c("ITC", "ITC4", "ITH", "ITH5")))
+  expect_equal(dimension_moves("IT", children),
+               list(c("IT", "ITC", "ITC1"), c("IT", "ITC", "ITC4"), c("IT", "ITH", "ITH5")))
+  expect_length(dimension_moves("ITH5", children), 0)       # an only child
+  expect_equal(dimension_moves("F", list(Total = c("F", "M"))), list(c("F", "M")))
+})
+
+test_that("augment_suppression protects a pattern with too few suppressions", {
+  tab <- protect_income_table(persons)
+  micro <- tab$micro
+  weak <- data.table::copy(tab$final)[sdcStatus == "x", sdcStatus := "s"]
+  aug <- augment_suppression(weak, micro)
+  expect_true(all(audit_protection_intervals(aug$final, micro)$protected))
+  changed <- which(aug$final$sdcStatus != weak$sdcStatus)
+  expect_gt(length(changed), 0)
+  expect_true(all(weak$sdcStatus[changed] == "s"))
+  expect_true(all(aug$final$sdcStatus[changed] == "x"))
+  expect_equal(aug$final[sdcStatus == "u", .(region, occupation, sex)],
+               weak[sdcStatus == "u", .(region, occupation, sex)])
+  expect_equal(nrow(aug$added), length(changed))
+  expect_setequal(paste(aug$added$region, aug$added$occupation, aug$added$sex),
+                  paste(weak$region, weak$occupation, weak$sex)[changed])
+  expect_equal(aug$added$income, weak[aug$added, income, on = c("region", "occupation", "sex")])
+})
+
+test_that("augment_suppression changes nothing on a protected pattern", {
+  tab <- protect_income_table(persons)
+  aug <- augment_suppression(tab$final, tab$micro)
+  expect_equal(nrow(aug$added), 0)
+  expect_identical(aug$final, tab$final)
+})
+
+test_that("augment_suppression stops after max_rounds, naming the cell", {
+  tab <- protect_income_table(persons)
+  weak <- data.table::copy(tab$final)[sdcStatus == "x", sdcStatus := "s"]
+  expect_error(augment_suppression(weak, tab$micro, max_rounds = 0),
+               "IT[A-Z0-9]*/(OC0[1-9]|Total)/(M|F|Total).*decide with the user")
 })
